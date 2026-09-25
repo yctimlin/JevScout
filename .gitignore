@@ -1,0 +1,6 @@
+node_modules/
+.env*
+coverage/
+bench/results/
+*.tgz
+dist/

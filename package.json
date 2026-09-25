@@ -1,0 +1,40 @@
+{
+  "name": "jevscout",
+  "version": "0.3.0",
+  "description": "Condense large MCP tool results before they fill Claude Code's context, with exact recovery.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yctimlin/JevScout.git"
+  },
+  "homepage": "https://github.com/yctimlin/JevScout#readme",
+  "bugs": {
+    "url": "https://github.com/yctimlin/JevScout/issues"
+  },
+  "bin": {
+    "jevscout": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "docs/evaluation.md"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
