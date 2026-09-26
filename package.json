@@ -2,6 +2,21 @@
   "name": "jevscout",
   "version": "0.4.0",
   "description": "A Claude Code hook where TypeSafe's Jev decides which parts of large MCP results reach the agent, with exact recovery.",
+  "keywords": [
+    "claude-code",
+    "claude-code-hook",
+    "mcp",
+    "mcp-server",
+    "context-management",
+    "context-window",
+    "context-compression",
+    "llm-context",
+    "ai-coding-agent",
+    "typesafe",
+    "jev",
+    "semantic-ranking",
+    "posttooluse"
+  ],
   "type": "module",
   "license": "MIT",
   "repository": {

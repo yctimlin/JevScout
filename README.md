@@ -1,8 +1,8 @@
-# JevScout
+# JevScout: Claude Code MCP Context Management Hook
 
-**Let TypeSafe's Jev decide which parts of a large tool result reach Claude Code.**
+**Semantic context compression and exact recovery for large Model Context Protocol (MCP) responses in Claude Code.**
 
-JevScout is an opt-in Claude Code hook built around [TypeSafe's Jev](https://docs.typesafe.ai/primitives). When an MCP tool (GitHub, Notion, Linear, Slack, fetch servers, and others) returns a large text result, Jev judges every part of it against what you asked, including parts worded differently from your request, and JevScout replaces the result with a compact packet of the relevant parts, verbatim, with gaps marked and exact recovery of anything omitted. If Jev cannot run, the result reaches Claude Code unchanged. JevScout is independent open-source software, not an official TypeSafe product.
+JevScout is an open-source Claude Code `PostToolUse` hook for managing large MCP tool responses. Built around [TypeSafe's Jev](https://docs.typesafe.ai/primitives), it semantically ranks document sections, JSON records, issue searches, comment threads, changelogs, and other external context before they fill the Claude Code context window. The hook keeps relevant source text verbatim, marks omitted sections, and provides exact local recovery. If Jev cannot run, the original result reaches Claude Code unchanged. JevScout is independent open-source software, not an official TypeSafe product.
 
 | Component | Status |
 | --- | --- |
@@ -12,7 +12,28 @@ JevScout is an opt-in Claude Code hook built around [TypeSafe's Jev](https://doc
 | Codex MCP proxy | **Experimental.** Not validated for this release. |
 | Local `search`, `github`, `check` commands | Experimental; mixed pilot results. |
 
-## Set up
+## At a glance
+
+| Question | Answer |
+| --- | --- |
+| What is JevScout? | A Claude Code hook that reduces large MCP responses before they consume the agent's context window. |
+| What makes selection semantic? | TypeSafe's Jev scores response previews for relevance and inspects promising segments, including paraphrased facts and meaning-based matches. |
+| What is preserved? | Verbatim selected text, omission markers, source positions, and exact local recovery. |
+| What happens when Jev is unavailable? | The hook fails open and leaves the original tool result unchanged. |
+| Which connectors can it handle? | MCP servers for GitHub, Notion, Linear, Slack, fetch services, issue search, and similar text sources. |
+
+## Use cases
+
+JevScout is designed for Claude Code workflows that receive large external-context results, including:
+
+- Reading long GitHub issue searches, pull requests, and comment threads.
+- Finding a fact in a large changelog, Markdown or reStructuredText document, or JSON response.
+- Reducing MCP context usage while keeping an exact recovery path to the original response.
+- Selecting evidence from text that uses different words from the user's request.
+
+It does not replace Claude Code's built-in `Read`, `Bash`, or `WebFetch` tools. The evaluated path is the Claude Code MCP `PostToolUse` hook.
+
+## Install the Claude Code MCP hook
 
 Requires Node.js 24+, Claude Code (tested with 2.1.281), and a TypeSafe API key.
 
@@ -36,13 +57,22 @@ Requires Node.js 24+, Claude Code (tested with 2.1.281), and a TypeSafe API key.
 ## What the hook does
 
 - **Only large, oversized results.** By default the hook acts only when a result exceeds Claude Code's own limit (Claude Code would otherwise replace it with a notice asking the agent to read a saved copy completely, in chunks) **and** is at least 100 KB. Smaller results pass through unchanged: inline results are cheap, and just over the limit Claude Code's own saved-copy flow is cheap too. `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` changes the floor; `JEVSCOUT_HOOK_SCOPE=all` also condenses inline results over 8,000 bytes.
-- **Jev judges every part.** Results are split by shape: JSON records (including JSON after a text preamble, truncated arrays, and large nested maps), markdown or reStructuredText sections with their heading path, or line windows. Jev scores a short preview of every segment (up to 3,000) against your request, then scores the most promising segments in full. Keyword matches only break ties. The packet (at most 6,000 bytes) keeps the chosen parts verbatim.
+- **Jev judges response segments.** Results are split by shape: JSON records (including JSON after a text preamble, truncated arrays, and large nested maps), markdown or reStructuredText sections with their heading path, or line windows. Jev scores short segment previews across the response, then scores the most promising segments in full. Keyword matches only break ties. The packet (at most 6,000 bytes) keeps the chosen parts verbatim.
 - **Saved copies:** the hook condenses Claude Code's saved copy of an oversized result, reading it only from the current session's `tool-results` directory.
 - **Your request** is the tool's arguments plus your latest prompt, without URLs or the tool's own name.
 - **When Jev finds nothing likely relevant** (best estimate below 0.5), the original result passes through unchanged, so Claude Code's normal flow applies.
 - **Recovery:** `node dist/cli.js output <id> --segment N | --grep TEXT | --all` returns exact original text. `--grep` accepts literal text or, if that finds nothing, a regular expression.
 - **Fails open:** with no key, a TypeSafe error or timeout (one retry for server errors), or any other problem, the original result is left unchanged. Images and other non-text results are never touched.
 - **Not covered:** Claude Code's built-in `Read`, `Bash`, and `WebFetch` output cannot be replaced by hooks (WebFetch already returns a model summary).
+
+### How it works
+
+1. Claude Code receives a text response from an MCP server.
+2. The hook checks whether the response is an oversized saved result and meets the configured size floor.
+3. Jev scores previews of the response segments against the tool request and latest user prompt.
+4. JevScout sends a compact, source-faithful packet to Claude Code and keeps the full response locally for recovery.
+
+The default path is reversible: small responses, low-confidence results, missing credentials, provider failures, and timeouts continue through Claude Code's normal handling.
 
 ## Evaluation
 
@@ -56,6 +86,32 @@ The current hook scope is deliberately narrow:
 - TypeSafe usage is billed separately from the agent's reported cost.
 
 The [evaluation notes](docs/evaluation.md) describe the public quality checks and operating limits.
+
+## Frequently asked questions
+
+### What is a Claude Code MCP context hook?
+
+It is a Claude Code `PostToolUse` hook that can replace a large MCP text response with a smaller, relevant packet before the response occupies the agent's context window. JevScout is that hook, with semantic selection and exact recovery.
+
+### Does JevScout summarize or rewrite source text?
+
+No. Selected source values are kept verbatim. Jev chooses which segments are shown; the original response remains available through the local recovery command.
+
+### What happens if I do not have a TypeSafe API key?
+
+The default Jev mode passes the MCP result through unchanged. JevScout does not silently fall back to keyword-only condensing. `JEVSCOUT_HOOK_MODE=lexical` is an explicit local opt-in and is not recommended for paraphrased requests.
+
+### Does JevScout send private connector data to TypeSafe?
+
+When a qualifying result is condensed, the hook sends segment previews, candidate segment text, and the relevance request to `api.typesafe.ai`. Originals stay in the local cache with owner-only permissions. Use pass-through mode or lexical-only mode when content must remain local.
+
+### What response sizes does the hook condense?
+
+By default, only oversized MCP responses at or above 100 KB are condensed. Inline responses and smaller oversized responses pass through unchanged. `JEVSCOUT_HOOK_SCOPE=all` enables the older inline threshold behavior for users who explicitly need it.
+
+### Does it work with Codex?
+
+The Codex MCP proxy is experimental and has separate host limitations. The ready opt-in path documented here is the Claude Code MCP hook.
 
 ## Privacy and data
 
