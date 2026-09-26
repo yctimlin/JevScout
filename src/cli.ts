@@ -8,7 +8,7 @@ import { renderEvidence, selectText } from './present.ts';
 import { openGitHubIssue, searchGitHub } from './github.ts';
 import { check, parseCheckInput, readBoundedInput } from './check.ts';
 import { recoverOutput } from './condense.ts';
-import { CLI_PATH, condenseStdin, execCondensed, hookSettings, readStdin, runHook, settingsPath, updateSettings, withJevScout, withoutJevScout } from './hook.ts';
+import { CLI_PATH, condenseStdin, execCondensed, hookSettings, installNotice, readStdin, runHook, settingsPath, updateSettings, withJevScout, withoutJevScout } from './hook.ts';
 import { runProxy } from './mcp-proxy.ts';
 
 const help = `JevScout — source evidence before it fills your context
@@ -20,7 +20,7 @@ jevscout list <pack-id>
 jevscout github search "task or question" --repo owner/name [options]
 jevscout github open owner/name#123 [--budget-bytes N]
 jevscout check [--format json] [--budget-bytes N] [--model NAME] [--timeout-ms N]
-jevscout hook install | uninstall [--scope project|user] [--with-shell] [--dry-run]
+jevscout hook install | uninstall [--scope project|user] [--lexical-only] [--with-shell] [--dry-run]
 jevscout hook settings [--with-shell]   (print the configuration instead of writing it)
 jevscout mcp-proxy [--source NAME] -- MCP_SERVER_COMMAND [ARGS...]
 jevscout condense --source NAME --query TEXT < large-output
@@ -68,7 +68,7 @@ async function main() {
     repo: { type: 'string' }, limit: { type: 'string' }, 'follow-links': { type: 'boolean' },
     'evidence-sections': { type: 'boolean' },
     source: { type: 'string' }, query: { type: 'string' }, segment: { type: 'string' }, grep: { type: 'string' },
-    all: { type: 'boolean' }, context: { type: 'string' }, scope: { type: 'string' }, 'with-shell': { type: 'boolean' }, 'dry-run': { type: 'boolean' },
+    all: { type: 'boolean' }, context: { type: 'string' }, scope: { type: 'string' }, 'with-shell': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'lexical-only': { type: 'boolean' },
   } });
   if (values.version) {
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -77,14 +77,16 @@ async function main() {
   }
   if (values.help || !positionals.length) { console.log(help); return; }
   if (positionals[0] === 'hook' && positionals.length === 2) {
-    if (positionals[1] === 'settings') { process.stdout.write(JSON.stringify(hookSettings(CLI_PATH, { shell: values['with-shell'] }), null, 2) + '\n'); return; }
+    const hookOptions = { shell: values['with-shell'], lexicalOnly: values['lexical-only'] };
+    if (positionals[1] === 'settings') { process.stdout.write(JSON.stringify(hookSettings(CLI_PATH, hookOptions), null, 2) + '\n'); return; }
     if (positionals[1] === 'install' || positionals[1] === 'uninstall') {
       const scope = values.scope ?? 'project';
       if (scope !== 'project' && scope !== 'user') throw new Error('Scope must be project or user.');
       const result = updateSettings(settingsPath(scope), settings => positionals[1] === 'install'
-        ? withJevScout(settings, CLI_PATH, { shell: values['with-shell'] }) : withoutJevScout(settings, CLI_PATH), values['dry-run']);
+        ? withJevScout(settings, CLI_PATH, hookOptions) : withoutJevScout(settings, CLI_PATH), values['dry-run']);
       if (values['dry-run']) process.stdout.write(JSON.stringify(result.settings, null, 2) + '\n');
       else process.stdout.write(`${positionals[1] === 'install' ? 'Installed JevScout hook in' : 'Removed JevScout hook from'} ${result.file}${result.backup ? ` (backup: ${result.backup})` : ''}\n`);
+      if (positionals[1] === 'install') process.stdout.write('\n' + installNotice(hookOptions));
       return;
     }
     // Hook entry points fail open: any problem yields no output, which leaves the tool call unchanged.

@@ -41,11 +41,20 @@ async function session(messages: object[], env: NodeJS.ProcessEnv, dir: string):
   return out;
 }
 
+test('the MCP proxy passes large results through unchanged when Jev cannot run', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'jevscout-proxy-nojev-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env: NodeJS.ProcessEnv = { ...process.env, JEVSCOUT_CACHE_DIR: dir };
+  delete env.TYPESAFE_API_KEY; delete env.JEVSCOUT_HOOK_MODE;
+  const out = await session([{ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'fetch_doc', arguments: { url: 'https://x.test/doc' } } }], env, dir);
+  const text = out.find(m => m.id === 3).result.content[0].text;
+  assert.ok(text.startsWith('## Section 0') && !text.includes('[JevScout condensed'), 'original returned untouched');
+});
+
 test('the MCP proxy condenses large text results, passes small ones through, and adds a recovery tool', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'jevscout-proxy-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env: NodeJS.ProcessEnv = { ...process.env, JEVSCOUT_CACHE_DIR: dir, JEVSCOUT_HOOK_BUDGET_BYTES: '3000' };
-  delete env.JEVSCOUT_HOOK_MODE;
+  const env: NodeJS.ProcessEnv = { ...process.env, JEVSCOUT_CACHE_DIR: dir, JEVSCOUT_HOOK_BUDGET_BYTES: '3000', JEVSCOUT_HOOK_MODE: 'lexical' };
   const out = await session([
     { jsonrpc: '2.0', id: 1, method: 'tools/list' },
     { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'fetch_doc', arguments: { size: 'small' } } },

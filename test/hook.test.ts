@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { condense, outputDir, projectRecord, pruneOutputs, queryTerms, recoverOutput, segment } from '../src/condense.ts';
-import { EXTERNAL_COMMAND, hookConfig, hookQuery, isLocator, savedOutputPath, updateSettings, withJevScout, withoutJevScout, latestUserPrompt, mcpText, postToolHook, preBashHook, shellQuote } from '../src/hook.ts';
+import { JevUnavailableError, coarsePool, condense, recordHint, outputDir, projectRecord, pruneOutputs, queryTerms, recoverOutput, segment } from '../src/condense.ts';
+import { EXTERNAL_COMMAND, hookConfig, hookQuery, hookSettings, installNotice, isLocator, savedOutputPath, updateSettings, withJevScout, withoutJevScout, latestUserPrompt, mcpText, postToolHook, preBashHook, shellQuote } from '../src/hook.ts';
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
@@ -69,13 +69,21 @@ test('markdown and plain text split at headings and blank lines', async t => {
   assert.ok(result.text.includes('Omitted:'));
 });
 
-test('Jev failure falls back to lexical selection with a notice', async t => {
+test('in Jev mode, a Jev failure or a missing key means no condensing at all', async t => {
   withCache(t);
   const fetcher = (async () => new Response('{}', { status: 500 })) as typeof fetch;
-  const result = await condense(searchJson, { query: 'Retry-After', source: 'test', budgetBytes: 3000, mode: 'auto', typeSafeKey: 'k', fetcher });
-  assert.equal(result.usedMode, 'lexical');
-  assert.ok(result.text.includes('Jev ranking unavailable'));
-  assert.ok(result.text.includes('Retry-After'));
+  await assert.rejects(() => condense(searchJson, { query: 'Retry-After', source: 'test', budgetBytes: 3000, mode: 'auto', typeSafeKey: 'k', fetcher }), JevUnavailableError);
+  await assert.rejects(() => condense(searchJson, { query: 'Retry-After', source: 'test', budgetBytes: 3000, mode: 'auto' }), JevUnavailableError);
+  const keyword = await condense(searchJson, { query: 'Retry-After', source: 'test', budgetBytes: 3000, mode: 'lexical' });
+  assert.ok(keyword.text.includes('Keyword selection (Jev off)'), 'explicit keyword mode is labelled');
+});
+
+test('the post-tool hook passes results through unchanged when Jev cannot run', async t => {
+  withCache(t);
+  const big = [{ type: 'text', text: searchJson }];
+  assert.equal(await postToolHook({ tool_name: 'mcp__gh__search', tool_input: { query: 'x' }, tool_response: big }, { ...hookConfig({}), budgetBytes: 3000 }).catch(() => null), null);
+  const { runHook } = await import('../src/hook.ts');
+  assert.equal(await runHook('post-tool', JSON.stringify({ tool_name: 'mcp__gh__search', tool_input: {}, tool_response: big })), '');
 });
 
 test('Jev scores reorder selection when available', async t => {
@@ -92,7 +100,7 @@ test('Jev scores reorder selection when available', async t => {
 
 test('post-tool hook condenses large MCP text, and leaves small, non-text, and built-in results alone', async t => {
   withCache(t);
-  const config = { ...hookConfig({}), budgetBytes: 3000 };
+  const config = { ...hookConfig({ JEVSCOUT_HOOK_MODE: 'lexical', JEVSCOUT_HOOK_SCOPE: 'all' }), budgetBytes: 3000 };
   const big = [{ type: 'text', text: searchJson }];
   const output = await postToolHook({ tool_name: 'mcp__github__search_issues', tool_input: { query: 'Retry-After 429' }, tool_response: big }, config) as any;
   assert.equal(output.hookSpecificOutput.hookEventName, 'PostToolUse');
@@ -101,6 +109,14 @@ test('post-tool hook condenses large MCP text, and leaves small, non-text, and b
   assert.equal(await postToolHook({ tool_name: 'mcp__x__y', tool_input: {}, tool_response: [...big, { type: 'image', data: 'AAA' }] }, config), null);
   assert.equal(await postToolHook({ tool_name: 'Read', tool_input: {}, tool_response: big }, config), null);
   assert.equal(mcpText({ content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }), 'a\nb');
+});
+
+test('URLs inside the user prompt are left out of the relevance query', t => {
+  const dir = withCache(t);
+  const transcript = join(dir, 'u.jsonl');
+  writeFileSync(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: 'Read https://raw.githubusercontent.com/prettier/prettier/main/CHANGELOG.md and find the marker' } }));
+  const query = hookQuery({}, transcript);
+  assert.ok(query.includes('find the marker') && !query.includes('prettier') && !query.includes('githubusercontent'));
 });
 
 test('the relevance query includes the latest typed user prompt, not tool results', t => {
@@ -139,7 +155,7 @@ test('pre-bash hook wraps external fetch commands only and never grants permissi
 
 test('exec keeps exit codes and stderr, passes small output, and condenses large output', t => {
   const dir = withCache(t);
-  const env = { ...process.env, JEVSCOUT_CACHE_DIR: dir, JEVSCOUT_HOOK_BUDGET_BYTES: '3000' };
+  const env = { ...process.env, JEVSCOUT_CACHE_DIR: dir, JEVSCOUT_HOOK_BUDGET_BYTES: '3000', JEVSCOUT_HOOK_MODE: 'lexical' };
   const small = spawnSync(process.execPath, [cli, 'exec', '--source', 'bash', '--query', 'q', '--', 'bash', '-c', 'echo hi; echo oops >&2; exit 3'], { env, encoding: 'utf8' });
   assert.equal(small.status, 3);
   assert.equal(small.stdout, 'hi\n');
@@ -181,7 +197,7 @@ test('oversized MCP results are read from the session tool-results copy, and now
   assert.equal(savedOutputPath(notice(outside), transcript), null);
   assert.equal(savedOutputPath(notice(join(results, '..', '..', '..', 'secret.txt')), transcript), null);
   const output = await postToolHook({ tool_name: 'mcp__gh__search', tool_input: { query: 'Retry-After 429' }, transcript_path: transcript,
-    tool_response: [{ type: 'text', text: notice(saved) }] }, { ...hookConfig({}), budgetBytes: 3000 }) as any;
+    tool_response: [{ type: 'text', text: notice(saved) }] }, { ...hookConfig({ JEVSCOUT_HOOK_MODE: 'lexical', JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES: '10000' }), budgetBytes: 3000 }) as any;
   assert.ok(output.hookSpecificOutput.updatedToolOutput.includes('Webhook retries ignore Retry-After'));
   assert.ok(!output.hookSpecificOutput.updatedToolOutput.includes('sequential chunks'));
 });
@@ -298,4 +314,156 @@ test('install merges into existing settings with a backup, and uninstall restore
   assert.deepEqual(withJevScout(after, '/x/cli.js'), after, 'installing twice changes nothing');
   updateSettings(file, s => withoutJevScout(s, '/x/cli.js'));
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), original);
+});
+
+// A mock Jev that finds one document relevant by meaning, whatever the query words are.
+function meaningJev(isRelevant: (text: string) => boolean, record: Array<{ ids: string[]; texts: string[] }> = []) {
+  return (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    record.push({ ids: body.state.documents.map((d: { id: string }) => d.id), texts: body.state.documents.map((d: { text: string }) => d.text) });
+    const answers = Object.fromEntries(body.state.documents.map((doc: { id: string; text: string }) => [doc.id, { type: 'noul', noul: isRelevant(doc.text) ? 0.97 : 0.02 }]));
+    return new Response(JSON.stringify({ model: 'jev-test', answers, usage: { input_tokens: 10, output_tokens: 2 } }));
+  }) as unknown as typeof fetch;
+}
+
+test('Jev can select a segment that shares no keywords with the query', async t => {
+  withCache(t);
+  const sections = Array.from({ length: 120 }, (_, i) => i === 83
+    // Same length as its neighbours, so budget packing cannot slip it in by size alone.
+    ? '## Housekeeping 83\nSockets that sit unused are torn down after 94 seconds, by the pool, for every one of them.'
+    : `## Timeout option ${i}\nThe timeout setting controls how long a request may run before the client gives up, for call ${i}.`);
+  const doc = sections.join('\n\n');
+  const query = 'How long can an idle connection stay open before it is closed?';
+  const lexical = await condense(doc, { query, source: 'docs', budgetBytes: 1500 });
+  assert.ok(!lexical.text.includes('94 seconds'), 'lexical selection misses the paraphrased fact');
+  const jev = await condense(doc, { query, source: 'docs', budgetBytes: 1500, mode: 'auto', typeSafeKey: 'k', fetcher: meaningJev(text => text.includes('torn down')) });
+  assert.equal(jev.usedMode, 'jev');
+  assert.ok(jev.text.includes('94 seconds'));
+});
+
+test('the coarse stage previews every segment, and large outputs mix lexical leaders with an even sample', async t => {
+  withCache(t);
+  const record: Array<{ ids: string[]; texts: string[] }> = [];
+  // Nothing relevant: the call passes through, but every record was still previewed.
+  await assert.rejects(() => condense(searchJson, { query: 'Retry-After', source: 'test', budgetBytes: 3000, mode: 'auto', typeSafeKey: 'k', fetcher: meaningJev(() => false, record) }), JevUnavailableError);
+  const coarseIds = new Set(record.filter(call => call.texts.every(text => text.length <= 400)).flatMap(call => call.ids));
+  assert.equal(coarseIds.size, 40, 'every record gets a preview');
+  const many = Array.from({ length: 1000 }, (_, i) => ({ index: i, label: `s${i}`, start: 0, end: 0, text: '', display: '', group: i, score: i % 7 }));
+  const pool = coarsePool(many as never, 400);
+  assert.equal(pool.length, 400);
+  assert.ok(pool.some(item => item.index > 900) && pool.some(item => item.index < 100), 'the sample spans the whole output');
+});
+
+test('a failed fine stage keeps the coarse ranking; a missing key is stated in the packet', async t => {
+  withCache(t);
+  let calls = 0;
+  const flaky = (async (url: string, init: RequestInit) => {
+    calls++;
+    const body = JSON.parse(String(init.body));
+    if (body.state.documents.some((d: { text: string }) => d.text.length > 400)) return new Response('{}', { status: 503 });
+    return meaningJev(text => text.includes('Webhook retries'))(url, init);
+  }) as unknown as typeof fetch;
+  const result = await condense(searchJson, { query: 'which item is about backoff headers?', source: 'test', budgetBytes: 3000, mode: 'auto', typeSafeKey: 'k', fetcher: flaky });
+  assert.equal(result.usedMode, 'jev');
+  assert.ok(result.text.includes('Webhook retries ignore Retry-After'));
+  await assert.rejects(() => condense(searchJson, { query: 'x', source: 'test', budgetBytes: 3000, mode: 'auto' }), JevUnavailableError);
+});
+
+test('a JSON-like code sample inside a markdown document does not make it JSON', () => {
+  const doc = ['# HTTP', '', 'Raw headers look like this:', '', '```js', "[ 'ConTent-Length', '123456',", "  'content-LENGTH', '123' ]", '```', '', ...Array.from({ length: 60 }, (_, i) => `## Section ${i}\n\nProse about section ${i}. `.repeat(3))].join('\n');
+  const segments = segment(doc);
+  assert.ok(segments.length > 30, 'split as markdown sections');
+  assert.ok(segments.every(item => !item.label.includes('truncated tail')));
+  assert.ok(segments.some(item => item.label.includes('Section 42')));
+});
+
+test('comment records are labelled by author and first line, and previews lead with their prose', () => {
+  const comments = Array.from({ length: 5 }, (_, i) => ({ id: 1000 + i, node_id: `N${i}`, user: { login: `user${i}`, id: i }, created_at: '2024-01-01T00:00:00Z',
+    author_association: 'NONE', reactions: { total_count: 0 }, body: i === 3 ? 'Raising the limit only postpones the crash; the cache is never reclaimed.' : `Routine comment ${i} with plenty of words to count as prose here.` }));
+  const segments = segment(JSON.stringify(comments));
+  assert.ok(segments[3].label.includes('user3: Raising the limit'));
+  assert.ok(segments[3].preview.startsWith('body: Raising the limit'));
+  assert.equal(recordHint({ id: 5 }), '5');
+  assert.equal(recordHint({ title: 'T', body: 'B' }), 'T');
+});
+
+test('with Jev, the keyword "not found" notice gives way to Jev confidence', async t => {
+  withCache(t);
+  const sections = Array.from({ length: 60 }, (_, i) => i === 40 ? '## Housekeeping\nSockets that sit unused are torn down after 94 seconds.' : `## Topic ${i}\nUnrelated prose about topic ${i}.`);
+  const doc = sections.join('\n\n');
+  const query = 'How long can an idle connection linger before disconnection?';
+  const confident = await condense(doc, { query, source: 'docs', budgetBytes: 1500, mode: 'auto', typeSafeKey: 'k', fetcher: meaningJev(text => text.includes('torn down')) });
+  assert.ok(!confident.text.includes('Not found anywhere'), 'no keyword notice when Jev selected');
+  assert.ok(!confident.text.includes('Jev found no part'));
+  await assert.rejects(() => condense(doc, { query, source: 'docs', budgetBytes: 1500, mode: 'auto', typeSafeKey: 'k', fetcher: meaningJev(() => false) }), JevUnavailableError, 'low confidence passes through');
+  const lexical = await condense(doc, { query, source: 'docs', budgetBytes: 1500, mode: 'lexical' });
+  assert.ok(lexical.text.includes('Not found anywhere'), 'keyword selection keeps the keyword notice');
+});
+
+test('the called tool name is removed from the relevance query', t => {
+  const dir = withCache(t);
+  const transcript = join(dir, 'tool.jsonl');
+  writeFileSync(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: 'Using the fetch_url tool, find the retry policy' } }));
+  const query = hookQuery({}, transcript, 'mcp__fixture__fetch_url');
+  assert.ok(!query.includes('fetch_url') && query.includes('retry policy'));
+});
+
+test('install enables Jev by default, never writes the key, and explains the data flow', () => {
+  const on = hookSettings('/x/cli.js');
+  assert.ok(!JSON.stringify(on).includes('JEVSCOUT_HOOK_MODE'), 'Jev is the default mode');
+  assert.ok(!JSON.stringify(on).includes('TYPESAFE_API_KEY='), 'the key is never written');
+  const off = hookSettings('/x/cli.js', { lexicalOnly: true });
+  assert.ok(off.hooks.PostToolUse[0].hooks[0].command.startsWith('JEVSCOUT_HOOK_MODE=lexical '));
+  const missingKeyNotice = installNotice({}, {});
+  assert.ok(missingKeyNotice.includes('TYPESAFE_API_KEY is not set'));
+  assert.ok(missingKeyNotice.includes('pass through unchanged'));
+  assert.ok(!missingKeyNotice.includes('local keyword selection'));
+  assert.ok(installNotice({}, { TYPESAFE_API_KEY: 'k' }).includes('api.typesafe.ai') && !installNotice({}, { TYPESAFE_API_KEY: 'k' }).includes('not set'));
+  assert.ok(installNotice({ lexicalOnly: true }).includes('nothing is sent'));
+});
+
+test('a transient Jev server error is retried once', async t => {
+  withCache(t);
+  let failures = 0;
+  const flaky = (async (url: string, init: RequestInit) => {
+    if (failures < 1) { failures++; return new Response('{}', { status: 500 }); }
+    return meaningJev(text => text.includes('Webhook retries'))(url, init);
+  }) as unknown as typeof fetch;
+  const result = await condense(searchJson, { query: 'backoff headers', source: 'test', budgetBytes: 3000, mode: 'auto', typeSafeKey: 'k', fetcher: flaky });
+  assert.equal(result.usedMode, 'jev');
+  assert.equal(failures, 1);
+});
+
+test('by default only oversized results are condensed; inline results pass through', async t => {
+  const dir = withCache(t);
+  const { mkdirSync } = await import('node:fs');
+  const transcript = join(dir, 'p', 's.jsonl');
+  const results = join(dir, 'p', 's', 'tool-results');
+  mkdirSync(results, { recursive: true });
+  writeFileSync(transcript, '');
+  const config = { ...hookConfig({ JEVSCOUT_HOOK_MODE: 'lexical', JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES: '10000' }), budgetBytes: 3000 };
+  assert.equal(config.scope, 'oversized');
+  const inline = await postToolHook({ tool_name: 'mcp__gh__search', tool_input: { query: 'Retry-After' }, transcript_path: transcript, tool_response: [{ type: 'text', text: searchJson }] }, config);
+  assert.equal(inline, null, 'an inline 20 KB result is left alone');
+  const saved = join(results, 'mcp-gh-1.txt');
+  writeFileSync(saved, searchJson);
+  const notice = `Error: result (200,000 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to ${saved}.\nFormat: Plain text`;
+  const oversized = await postToolHook({ tool_name: 'mcp__gh__search', tool_input: { query: 'Retry-After' }, transcript_path: transcript, tool_response: [{ type: 'text', text: notice }] }, config) as any;
+  assert.ok(oversized.hookSpecificOutput.updatedToolOutput.includes('Retry-After'));
+  assert.equal(hookConfig({ JEVSCOUT_HOOK_SCOPE: 'all' }).scope, 'all');
+});
+
+test('oversized results below the size floor pass through', async t => {
+  const dir = withCache(t);
+  const { mkdirSync } = await import('node:fs');
+  const transcript = join(dir, 'p', 'f.jsonl');
+  const results = join(dir, 'p', 'f', 'tool-results');
+  mkdirSync(results, { recursive: true });
+  writeFileSync(transcript, '');
+  const saved = join(results, 'mcp-x-1.txt');
+  writeFileSync(saved, searchJson);
+  const notice = `Error: result (60,000 characters) exceeds maximum allowed tokens. Output has been saved to ${saved}.\nFormat: Plain text`;
+  const input = { tool_name: 'mcp__x__y', tool_input: {}, transcript_path: transcript, tool_response: [{ type: 'text', text: notice }] };
+  assert.equal(hookConfig({}).minOversizedBytes, 100_000);
+  assert.equal(await postToolHook(input, { ...hookConfig({ JEVSCOUT_HOOK_MODE: 'lexical' }), budgetBytes: 3000 }), null, 'a ~20 KB saved result is below the default floor');
 });

@@ -1,7 +1,7 @@
 {
   "name": "jevscout",
-  "version": "0.3.0",
-  "description": "Condense large MCP tool results before they fill Claude Code's context, with exact recovery.",
+  "version": "0.4.0",
+  "description": "A Claude Code hook where TypeSafe's Jev decides which parts of large MCP results reach the agent, with exact recovery.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,7 @@
   },
   "scripts": {
     "start": "node src/cli.ts",
-    "test": "node --test test/*.test.ts",
+    "test": "env -u TYPESAFE_API_KEY node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",

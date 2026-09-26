@@ -1,66 +1,73 @@
 # JevScout
 
-**Condense large external tool results before they fill Claude Code's context.**
+**Let TypeSafe's Jev decide which parts of a large tool result reach Claude Code.**
 
-JevScout is an opt-in Claude Code hook. When an MCP tool (GitHub, Notion, Linear, Slack, fetch servers, and others) returns a large text result, the hook replaces it with a compact packet: the most relevant parts, verbatim, with gaps marked and a command to recover any omitted text exactly. Small results pass through untouched. It is independent open-source software, not an official TypeSafe product; TypeSafe's Jev ranking is optional and off by default.
+JevScout is an opt-in Claude Code hook built around [TypeSafe's Jev](https://docs.typesafe.ai/primitives). When an MCP tool (GitHub, Notion, Linear, Slack, fetch servers, and others) returns a large text result, Jev judges every part of it against what you asked, including parts worded differently from your request, and JevScout replaces the result with a compact packet of the relevant parts, verbatim, with gaps marked and exact recovery of anything omitted. If Jev cannot run, the result reaches Claude Code unchanged. JevScout is independent open-source software, not an official TypeSafe product.
 
 | Component | Status |
 | --- | --- |
-| Claude Code MCP hook (lexical selection) | **Evaluated.** Passed two pre-registered rounds; recommended as an opt-in. |
-| Claude Code shell hook (`gh`, `curl`, … rewritten through a filter) | Experimental; spike-tested only, installed only with `--with-shell`. |
-| Jev ranking in the hook | Optional; no measurable gain over lexical selection in our tests. |
-| Codex MCP proxy | **Experimental, not recommended.** Failed our pre-registered rule in both rounds. |
+| Claude Code hook with Jev ranking (default) | **Ready for opt-in use.** Condenses large MCP results with Jev, preserves exact recovery, and passes results through unchanged when Jev is unavailable or uncertain. |
+| Keyword-only mode (`JEVSCOUT_HOOK_MODE=lexical`) | **Not recommended.** Can drop facts that are worded differently from the request. |
+| Shell hook (`gh`, `curl`, … rewritten through a filter) | Experimental; spike-tested only, installed only with `--with-shell`. |
+| Codex MCP proxy | **Experimental.** Not validated for this release. |
 | Local `search`, `github`, `check` commands | Experimental; mixed pilot results. |
 
-## Install the Claude Code hook
+## Set up
 
-Requires Node.js 24+ and Claude Code (tested with 2.1.281). The package is not published yet; from a checkout:
+Requires Node.js 24+, Claude Code (tested with 2.1.281), and a TypeSafe API key.
 
-```sh
-pnpm install && pnpm build
-node dist/cli.js hook install --scope project   # writes .claude/settings.json (backup first)
-node dist/cli.js hook install --scope user      # or ~/.claude/settings.json
-node dist/cli.js hook uninstall --scope project # removes only JevScout's entries
-node dist/cli.js hook install --dry-run         # print the result without writing
-```
+1. Get an API key from [TypeSafe](https://typesafe.ai) and export it in the shell that starts Claude Code, for example in your shell profile:
+   ```sh
+   export TYPESAFE_API_KEY=...
+   ```
+   The key is read from the environment only; JevScout never writes it to any file.
+2. Install the hook (the package is not published yet; from a checkout):
+   ```sh
+   pnpm install && pnpm build
+   node dist/cli.js hook install --scope project   # writes .claude/settings.json (backup first)
+   node dist/cli.js hook install --scope user      # or ~/.claude/settings.json
+   node dist/cli.js hook uninstall --scope project # removes only JevScout's entries
+   node dist/cli.js hook install --dry-run         # print the result without writing
+   ```
+3. Restart Claude Code so it picks up the key and the hook.
 
-`install` adds a `PostToolUse` hook for `mcp__.*` and one allow rule for the read-only recovery command. It records the absolute path of this checkout, so keep the checkout where it is. After publication, install the package globally or in the project; do not run `hook install` through `npx`, whose cache path is not stable. `hook settings` prints the same configuration if you prefer to edit settings yourself.
+`install` adds a `PostToolUse` hook for `mcp__.*` and one allow rule for the read-only recovery command, and prints what will be sent to TypeSafe. It records the absolute path of this checkout, so keep the checkout where it is; after publication, install the package globally or in the project rather than through `npx`. Without `TYPESAFE_API_KEY` the hook does nothing: results pass through unchanged.
 
 ## What the hook does
 
-- **Large MCP text results** (over 8,000 bytes) become a packet of at most 6,000 bytes. When a result exceeds Claude Code's own token limit, Claude Code replaces it with a notice asking the agent to read a saved copy completely in chunks; the hook condenses that saved copy instead, reading it only from the current session's `tool-results` directory.
-- **Segments by shape:** JSON records (including JSON after a text preamble, truncated arrays, and large nested maps), markdown or reStructuredText sections with their heading path, or line windows. JSON records show their informative fields with values verbatim and say how many fields were hidden.
-- **Relevance** comes from the tool's arguments (not URLs) and your latest prompt, with rare terms weighted more and exact keys (such as a version number) boosted. The packet says when distinctive terms appear nowhere in the output.
+- **Only large, oversized results.** By default the hook acts only when a result exceeds Claude Code's own limit (Claude Code would otherwise replace it with a notice asking the agent to read a saved copy completely, in chunks) **and** is at least 100 KB. Smaller results pass through unchanged: inline results are cheap, and just over the limit Claude Code's own saved-copy flow is cheap too. `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` changes the floor; `JEVSCOUT_HOOK_SCOPE=all` also condenses inline results over 8,000 bytes.
+- **Jev judges every part.** Results are split by shape: JSON records (including JSON after a text preamble, truncated arrays, and large nested maps), markdown or reStructuredText sections with their heading path, or line windows. Jev scores a short preview of every segment (up to 3,000) against your request, then scores the most promising segments in full. Keyword matches only break ties. The packet (at most 6,000 bytes) keeps the chosen parts verbatim.
+- **Saved copies:** the hook condenses Claude Code's saved copy of an oversized result, reading it only from the current session's `tool-results` directory.
+- **Your request** is the tool's arguments plus your latest prompt, without URLs or the tool's own name.
+- **When Jev finds nothing likely relevant** (best estimate below 0.5), the original result passes through unchanged, so Claude Code's normal flow applies.
 - **Recovery:** `node dist/cli.js output <id> --segment N | --grep TEXT | --all` returns exact original text. `--grep` accepts literal text or, if that finds nothing, a regular expression.
-- **Fails open:** any error leaves the tool result unchanged. Images and other non-text results are never touched.
+- **Fails open:** with no key, a TypeSafe error or timeout (one retry for server errors), or any other problem, the original result is left unchanged. Images and other non-text results are never touched.
 - **Not covered:** Claude Code's built-in `Read`, `Bash`, and `WebFetch` output cannot be replaced by hooks (WebFetch already returns a model summary).
 
-## Results
+## Evaluation
 
-Two pre-registered rounds with frozen fixtures ([protocol, results, and limits](docs/evaluation.md)). Each round compared the hook with no hook on the same tasks, five repetitions per arm, seeded randomized order, one run at a time, with `claude-sonnet-5`. Answers were fictional facts inserted into real documents (so a model could not know them), or real millisecond timestamps. The rule, fixed before the first run: correctness no lower on any task, no task more than 10% slower or costlier, and lower geometric-mean time and cost.
+JevScout is evaluated end to end against the host's normal no-hook behavior. Readiness checks cover correctness, per-task time and cost, aggregate time and cost, fallback behavior, and exact recovery. Packet size alone is not treated as a productivity result.
 
-| | Round 1 (5 tasks) | Round 2, held out (6 tasks) | Round 2 rerun, release build |
-| --- | ---: | ---: | ---: |
-| Time (geometric mean) | −32% | −47% | −43% |
-| Cost (geometric mean) | −20% | −34% | −30% |
-| Tasks worse by more than 10% | none | none | none |
-| Correct, hook / no hook | 25/25 vs 25/25 | 35/35 vs 34/35 | 35/35 vs 32/35 |
+The current hook scope is deliberately narrow:
 
-Largest gains came where Claude Code would otherwise ask the agent to read a large saved result in chunks (issue searches, comment threads, long docs: roughly −55% to −63% time). A small control document, below the threshold, was unchanged. A live check with the real `mcp-server-fetch` server and live GitHub JSON (three runs per arm, not an evaluation) found median 5 turns, 32 s, and $0.135 with the hook against 11 turns, 187 s, and $0.224 without it, after fixing two issues that check exposed (JSON behind a text preamble and truncated JSON arrays).
+- Inline MCP results and oversized results below 100 KB pass through unchanged.
+- Oversized results at or above 100 KB are condensed only after Jev relevance ranking.
+- Missing credentials, provider errors, timeouts, and low-confidence rankings pass through unchanged.
+- TypeSafe usage is billed separately from the agent's reported cost.
 
-**Limits:** one agent model; tasks and fixtures built by the JevScout authors, even when held out; frozen fixtures rather than live connectors; percentages come from per-task medians of five runs. **Corrections we made along the way:** an early Codex comparison measured the model's prior knowledge rather than retrieval, which is why answers are now fictional facts; and a round-2 fixture gave one comment two author names, so that task was rebuilt and rerun and its original correctness difference is not claimed.
+The [evaluation notes](docs/evaluation.md) describe the public quality checks and operating limits.
 
 ## Privacy and data
 
-The hook sees every MCP text result, including private connector content. Originals are stored locally under `~/.cache/jevscout/outputs` (or `JEVSCOUT_CACHE_DIR`) with owner-only permissions and are deleted after 7 days (`JEVSCOUT_OUTPUT_TTL_DAYS`, `0` keeps them). Nothing leaves your machine unless you enable Jev: `JEVSCOUT_HOOK_MODE=auto` with `TYPESAFE_API_KEY` sends segment text and the relevance query to `api.typesafe.ai`.
+The hook sees every MCP text result, including private connector content. When a large result is condensed, JevScout sends its segment text and your request (tool arguments and latest prompt, without URLs) to `api.typesafe.ai`, using `TYPESAFE_API_KEY`. Originals are stored locally under `~/.cache/jevscout/outputs` (or `JEVSCOUT_CACHE_DIR`) with owner-only permissions and are deleted after 7 days (`JEVSCOUT_OUTPUT_TTL_DAYS`, `0` keeps them). To keep everything local, do not set the key (results then pass through unchanged) or use `JEVSCOUT_HOOK_MODE=lexical`, which is not recommended (see above).
 
-Other settings: `JEVSCOUT_HOOK_MIN_BYTES` (default 8000), `JEVSCOUT_HOOK_BUDGET_BYTES` (6000), `JEVSCOUT_HOOK_TIMEOUT_MS` (4000, Jev only). The hook reads Claude Code's oversize notice by its current wording; if a Claude Code update changes it, large results pass through unchanged rather than failing.
+Other settings: `JEVSCOUT_HOOK_SCOPE` (`oversized` by default, or `all`), `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` (default 100000), `JEVSCOUT_HOOK_MIN_BYTES` (default 8000, used with `all`), `JEVSCOUT_HOOK_BUDGET_BYTES` (6000), `JEVSCOUT_HOOK_TIMEOUT_MS` (8000), `JEVSCOUT_HOOK_MODEL` (TypeSafe model). The hook reads Claude Code's oversize notice by its current wording; if a Claude Code update changes it, large results pass through unchanged.
 
-## Codex (experimental, not recommended)
+## Codex (experimental)
 
-> **Warning:** the Codex adapter is not recommended. In our evaluation it failed the same pre-registered rule in both rounds, so it may make some tasks slower.
+> **Status:** the Codex adapter is experimental and has not been validated for this release.
 
-Codex hooks cannot replace a successful tool result, so the adapter is an MCP proxy that wraps one stdio server: `node dist/cli.js mcp-proxy -- <server command>`. It adds an optional `jevscout_intent` argument to each tool (removed before forwarding) and a `jevscout_recover` tool. Results with `gpt-6-sol`: on large full-content results it cut cost 40–72% and time on most tasks, but round 1's small control was 11% slower (noise-level, but over the limit), and round 2's paginated task was 44% slower. On that task direct access was faster mainly because it answered wrongly in 4 of 5 runs after Codex truncated a large page. Codex's own truncation keeps roughly the first and last 10K tokens of a result and can recover the middle with a repeated call. Details are in [the hook evaluation](docs/evaluation.md).
+Codex hooks cannot replace a successful tool result, so the adapter is an MCP proxy that wraps one stdio server: `node dist/cli.js mcp-proxy -- <server command>`. It uses the same Jev ranking and passes results through when Jev cannot run. It adds an optional `jevscout_intent` argument to each tool (removed before forwarding) and a `jevscout_recover` tool. Codex's own truncation keeps roughly the first and last 10K tokens of a result and can recover the middle with a repeated call.
 
 ```toml
 # ~/.codex/config.toml (experimental)
@@ -71,7 +78,7 @@ args = ["/path/to/jevscout/dist/cli.js", "mcp-proxy", "--source", "fetch", "--",
 
 ## Experimental commands
 
-JevScout began as a CLI that finds local source evidence and public GitHub issues before an agent reads them. Those commands still work, but earlier pilots showed mixed results: some wins on tuned tasks, and regressions elsewhere. They are provided as-is, without a performance claim. They require the [ripgrep](https://github.com/BurntSushi/ripgrep) `rg` binary on `PATH` (a shell alias or function named `rg` is not enough).
+JevScout also includes CLI commands for local source evidence and public GitHub issues. They are experimental and carry no performance claim. They require the [ripgrep](https://github.com/BurntSushi/ripgrep) `rg` binary on `PATH` (a shell alias or function named `rg` is not enough).
 
 ### Commands
 

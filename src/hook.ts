@@ -7,7 +7,14 @@ import { condense } from './condense.ts';
 
 // Hooks must never break tool use: every entry point fails open (no output leaves the tool result as is).
 export interface HookConfig {
+  // 'oversized' (default): condense only results that exceed Claude Code's own limit, which Claude
+  // Code would otherwise replace with a "read the saved copy in chunks" notice. 'all': also condense
+  // inline results above minBytes.
+  scope: 'oversized' | 'all';
   minBytes: number;
+  // Oversized results below this size pass through: just over Claude Code's limit its own
+  // saved-copy flow is cheap, and evaluations were mixed there.
+  minOversizedBytes: number;
   budgetBytes: number;
   mode: 'lexical' | 'auto';
   typeSafeKey?: string;
@@ -21,13 +28,16 @@ export function hookConfig(env: NodeJS.ProcessEnv = process.env): HookConfig {
     return value !== undefined && Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
   };
   return {
+    scope: env.JEVSCOUT_HOOK_SCOPE === 'all' ? 'all' : 'oversized',
     minBytes: number(env.JEVSCOUT_HOOK_MIN_BYTES, 8000, 512, 10_000_000),
+    minOversizedBytes: number(env.JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES, 100_000, 0, 100_000_000),
     budgetBytes: number(env.JEVSCOUT_HOOK_BUDGET_BYTES, 6000, 1000, 1_000_000),
-    // Jev sees connector content, so it is opt-in: set JEVSCOUT_HOOK_MODE=auto and TYPESAFE_API_KEY.
-    mode: env.JEVSCOUT_HOOK_MODE === 'auto' ? 'auto' : 'lexical',
+    // Jev mode is the default. Without a key, or if Jev fails, results pass through unchanged.
+    // JEVSCOUT_HOOK_MODE=lexical selects keyword-only condensing, which can drop paraphrased facts.
+    mode: env.JEVSCOUT_HOOK_MODE === 'lexical' ? 'lexical' : 'auto',
     typeSafeKey: env.TYPESAFE_API_KEY,
     model: env.JEVSCOUT_HOOK_MODEL,
-    timeoutMs: number(env.JEVSCOUT_HOOK_TIMEOUT_MS, 4000, 500, 30_000),
+    timeoutMs: number(env.JEVSCOUT_HOOK_TIMEOUT_MS, 8000, 500, 25_000),
   };
 }
 
@@ -73,9 +83,16 @@ export function isLocator(value: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(value.trim());
 }
 
-export function hookQuery(toolInput: unknown, transcriptPath: unknown): string {
+export function withoutUrls(text: string): string {
+  return text.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
+}
+
+// The called tool's own name (e.g. "fetch_url" in "Using the fetch_url tool") says nothing about the content.
+export function hookQuery(toolInput: unknown, transcriptPath: unknown, toolName = ''): string {
   const args = stringsIn(toolInput).filter(item => item.length <= 500 && !isLocator(item)).join(' ');
-  const prompt = latestUserPrompt(transcriptPath).slice(-1500);
+  const short = toolName.split('__').at(-1) ?? '';
+  const withoutTool = (text: string) => short ? text.split(short).join(' ') : text;
+  const prompt = withoutTool(withoutUrls(latestUserPrompt(transcriptPath))).slice(-1500);
   return `${args}\n${prompt}`.trim().slice(0, 2000);
 }
 
@@ -109,14 +126,19 @@ export async function postToolHook(input: any, config = hookConfig()): Promise<o
   if (!tool.startsWith('mcp__')) return null;
   let text = mcpText(input.tool_response);
   const saved = text === null ? null : savedOutputPath(text, input.transcript_path);
+  // Results Claude Code delivers inline are already cheap to read; evaluations showed condensing them
+  // could make agents slower, so by default only oversized results are condensed.
+  if (!saved && config.scope === 'oversized') return null;
   if (saved) text = readFileSync(saved, 'utf8');
   if (text === null || Buffer.byteLength(text) <= config.minBytes) return null;
+  if (config.scope === 'oversized' && Buffer.byteLength(text) < config.minOversizedBytes) return null;
   const result = await condense(text, {
-    query: hookQuery(input.tool_input, input.transcript_path), source: tool,
+    query: hookQuery(input.tool_input, input.transcript_path, tool), source: tool,
     budgetBytes: config.budgetBytes, mode: config.mode, typeSafeKey: config.typeSafeKey, model: config.model, timeoutMs: config.timeoutMs, recoverCommand: outputCommand(),
   });
   if (result.outputBytes >= Buffer.byteLength(text)) return null;
   return { hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: result.text } };
+  // condense() throws when Jev cannot run; runHook() turns that into no output, leaving the result unchanged.
 }
 
 // Shell commands that load external context. Local search (rg, cat, git) is deliberately excluded.
@@ -224,8 +246,11 @@ export async function runHook(kind: string, raw: string): Promise<string> {
 }
 
 // The MCP hook is the evaluated feature; the shell rewrite is opt-in because it was only spike-tested.
-export function hookSettings(cli: string, options: { shell?: boolean } = {}): any {
-  const command = (kind: string) => `${shellWord(nodePath())} ${shellWord(cli)} hook ${kind}`;
+// Jev ranking is on by default (it uses TYPESAFE_API_KEY from the environment; the key is never
+// written to settings). lexicalOnly pins the hook to local keyword selection.
+export function hookSettings(cli: string, options: { shell?: boolean; lexicalOnly?: boolean } = {}): any {
+  const prefix = options.lexicalOnly ? 'JEVSCOUT_HOOK_MODE=lexical ' : '';
+  const command = (kind: string) => `${prefix}${shellWord(nodePath())} ${shellWord(cli)} hook ${kind}`;
   return {
     // Both commands only read (stdin, or JevScout's local output cache). Wrapped fetch commands keep your own rules.
     permissions: { allow: [`Bash(${outputCommand(cli)}:*)`, ...(options.shell ? [`Bash(${condenseCommand(cli)}:*)`] : [])] },
@@ -261,7 +286,7 @@ export function withoutJevScout(settings: any, cli: string): any {
   return next;
 }
 
-export function withJevScout(settings: any, cli: string, options: { shell?: boolean } = {}): any {
+export function withJevScout(settings: any, cli: string, options: { shell?: boolean; lexicalOnly?: boolean } = {}): any {
   const next = withoutJevScout(settings, cli);
   const ours = hookSettings(cli, options);
   next.hooks ??= {};
@@ -272,6 +297,18 @@ export function withJevScout(settings: any, cli: string, options: { shell?: bool
 }
 
 // Writes a timestamped backup before changing an existing settings file.
+export function installNotice(options: { lexicalOnly?: boolean }, env: NodeJS.ProcessEnv = process.env): string {
+  if (options.lexicalOnly) return 'Jev ranking is off (--lexical-only): selection is local keyword matching; nothing is sent to TypeSafe.\n';
+  const lines = [
+    'Jev ranking is on. When a large MCP result is condensed, JevScout sends its segment text and your request',
+    '(tool arguments and latest prompt, without URLs) to api.typesafe.ai using TYPESAFE_API_KEY from the environment.',
+    'The key is never written to settings. Set JEVSCOUT_HOOK_MODE=lexical to keep everything local.',
+  ];
+  if (!env.TYPESAFE_API_KEY) lines.push('', 'TYPESAFE_API_KEY is not set, so MCP results pass through unchanged until it is.',
+    'Get a key from TypeSafe (https://typesafe.ai), export TYPESAFE_API_KEY in the shell that starts Claude Code, then restart it.');
+  return lines.join('\n') + '\n';
+}
+
 export function updateSettings(file: string, change: (settings: any) => any, dryRun = false): { file: string; backup: string | null; settings: any } {
   const existing = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   const settings = change(existing);

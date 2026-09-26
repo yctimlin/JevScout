@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { condense, recoverOutput } from './condense.ts';
-import { hookConfig, isLocator, type HookConfig } from './hook.ts';
+import { hookConfig, isLocator, withoutUrls, type HookConfig } from './hook.ts';
 
 // A stdio MCP proxy for hosts whose hooks cannot replace MCP results (Codex). Every message is
 // forwarded unchanged, except that large text results of tools/call come back as condensed packets,
@@ -40,7 +40,7 @@ const recoverTool = {
 
 function strings(value: unknown, out: string[] = [], depth = 0): string[] {
   if (depth > 4) return out;
-  if (typeof value === 'string' && value.length <= 500 && !isLocator(value)) out.push(value);
+  if (typeof value === 'string' && value.length <= 500 && !isLocator(value)) out.push(withoutUrls(value));
   else if (Array.isArray(value)) for (const item of value) strings(item, out, depth + 1);
   else if (value && typeof value === 'object') for (const item of Object.values(value)) strings(item, out, depth + 1);
   return out;
