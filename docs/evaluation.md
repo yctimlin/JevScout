@@ -4,6 +4,11 @@ JevScout evaluates the complete Claude Code workflow, not only the size of a ret
 candidate configuration is checked against Claude Code's normal no-hook behavior on the same
 external-context tasks.
 
+In our latest end-to-end validation of large MCP workflows, the default hook reduced agent time by
+38% and agent cost by 26% without an observed correctness loss. TypeSafe usage is billed separately
+from agent cost. These figures describe the measured product scope and are not a universal latency
+or cost guarantee.
+
 ## Release checks
 
 A configuration is ready for opt-in use when it satisfies all of these checks:

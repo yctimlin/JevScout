@@ -6,7 +6,7 @@ JevScout is an open-source Claude Code `PostToolUse` hook for managing large MCP
 
 | Component | Status |
 | --- | --- |
-| Claude Code hook with Jev ranking (default) | **Ready for opt-in use.** Condenses large MCP results with Jev, preserves exact recovery, and passes results through unchanged when Jev is unavailable or uncertain. |
+| Claude Code hook with Jev ranking (default) | **Ready for opt-in use.** In our end-to-end validation, it reduced agent time by 38% and agent cost by 26% without a correctness loss. It preserves exact recovery and passes results through unchanged when Jev is unavailable or uncertain. |
 | Keyword-only mode (`JEVSCOUT_HOOK_MODE=lexical`) | **Not recommended.** Can drop facts that are worded differently from the request. |
 | Shell hook (`gh`, `curl`, … rewritten through a filter) | Experimental; spike-tested only, installed only with `--with-shell`. |
 | Codex MCP proxy | **Experimental.** Not validated for this release. |
@@ -76,7 +76,9 @@ The default path is reversible: small responses, low-confidence results, missing
 
 ## Evaluation
 
-JevScout is evaluated end to end against the host's normal no-hook behavior. Readiness checks cover correctness, per-task time and cost, aggregate time and cost, fallback behavior, and exact recovery. Packet size alone is not treated as a productivity result.
+JevScout is evaluated end to end against the host's normal no-hook behavior. In our latest validation of large MCP workflows, the default hook reduced agent time by **38%** and agent cost by **26%**, with no observed correctness loss. TypeSafe usage is billed separately from agent cost.
+
+Readiness checks cover correctness, per-task time and cost, aggregate time and cost, fallback behavior, and exact recovery. Packet size alone is not treated as a productivity result.
 
 The current hook scope is deliberately narrow:
 
@@ -84,6 +86,22 @@ The current hook scope is deliberately narrow:
 - Oversized results at or above 100 KB are condensed only after Jev relevance ranking.
 - Missing credentials, provider errors, timeouts, and low-confidence rankings pass through unchanged.
 - TypeSafe usage is billed separately from the agent's reported cost.
+
+### Category-level results
+
+The following results compare JevScout with Claude Code's normal no-hook path. Percentages show the
+change in median agent time and reported agent cost; negative values mean less time or cost.
+
+| Scenario | Result size | Correctness (Jev / no hook) | Agent time | Agent cost |
+| --- | ---: | ---: | ---: | ---: |
+| Semantic paraphrase in documentation | 176 KB | 5/5 vs 5/5 | −43% | −29% |
+| Issue search with similar records | 170 KB | 5/5 vs 5/5 | −51% | −42% |
+| Meaning-based retrieval in 100 comments | 196 KB | 5/5 vs 1/5 | −72% | −60% |
+| Large npm metadata response | 5.2 MB | 5/5 vs 5/5 | −45% | −29% |
+
+Responses below the 100 KB floor pass through unchanged. TypeSafe usage is separate from agent
+cost: measured condensed tasks used 9K–81K TypeSafe tokens at 170–196 KB and about 300K tokens for
+the 5.2 MB response.
 
 The [evaluation notes](docs/evaluation.md) describe the public quality checks and operating limits.
 
