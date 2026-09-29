@@ -316,6 +316,38 @@ test('install merges into existing settings with a backup, and uninstall restore
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), original);
 });
 
+test('install replaces a JevScout hook from another install path and keeps unrelated hooks', t => {
+  const dir = withCache(t);
+  const { mkdirSync } = require('node:fs');
+  // An old checkout that still exists, identified by its package.json name.
+  const checkout = join(dir, 'code', 'js');
+  mkdirSync(join(checkout, 'dist'), { recursive: true });
+  writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'jevscout' }));
+  const oldCli = join(checkout, 'dist', 'cli.js');
+  // A removed install whose path has spaces, so it was written quoted.
+  const goneCli = '/Users/me/Old Tools/jevscout/dist/cli.js';
+  // Another tool with the same command shape must not be touched.
+  const otherCli = join(dir, 'other-tool', 'dist', 'cli.js');
+  const old = {
+    permissions: { allow: ['Bash(ls:*)', `Bash(/usr/bin/node ${oldCli} output:*)`, `Bash(/usr/bin/node ${shellQuote(goneCli)} output:*)`, `Bash(/usr/bin/node ${otherCli} output:*)`] },
+    hooks: { PostToolUse: [
+      { matcher: 'mcp__.*', hooks: [{ type: 'command', command: `/usr/bin/node ${oldCli} hook post-tool`, timeout: 30 }] },
+      { matcher: 'mcp__.*', hooks: [{ type: 'command', command: `JEVSCOUT_HOOK_MODE=lexical /usr/bin/node ${shellQuote(goneCli)} hook post-tool` }] },
+      { matcher: 'mcp__.*', hooks: [{ type: 'command', command: `/usr/bin/node ${otherCli} hook post-tool` }] },
+    ] },
+  };
+  const installed = withJevScout(old, '/new/lib/node_modules/jevscout/dist/cli.js');
+  const commands = installed.hooks.PostToolUse.flatMap((group: any) => group.hooks.map((hook: any) => hook.command));
+  assert.equal(commands.length, 2, 'one JevScout hook plus the other tool');
+  assert.ok(commands.some((command: string) => command.includes('/new/lib/node_modules/jevscout/dist/cli.js hook post-tool')));
+  assert.ok(commands.includes(`/usr/bin/node ${otherCli} hook post-tool`));
+  assert.deepEqual(installed.permissions.allow.filter((rule: string) => !rule.includes('/new/')),
+    ['Bash(ls:*)', `Bash(/usr/bin/node ${otherCli} output:*)`]);
+  const removed = withoutJevScout(installed, '/somewhere/else/cli.js');
+  assert.deepEqual(removed.hooks.PostToolUse, [{ matcher: 'mcp__.*', hooks: [{ type: 'command', command: `/usr/bin/node ${otherCli} hook post-tool` }] }]);
+  assert.deepEqual(removed.permissions.allow, ['Bash(ls:*)', `Bash(/usr/bin/node ${otherCli} output:*)`]);
+});
+
 // A mock Jev that finds one document relevant by meaning, whatever the query words are.
 function meaningJev(isRelevant: (text: string) => boolean, record: Array<{ ids: string[]; texts: string[] }> = []) {
   return (async (_url: string, init: RequestInit) => {

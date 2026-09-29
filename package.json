@@ -1,6 +1,6 @@
 {
   "name": "jevscout",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "TypeSafe's Jev decisions for coding agents: a Claude Code hook that keeps the relevant parts of large MCP results, and a Codex app-server adapter that runs reviewed operations.",
   "keywords": [
     "claude-code",

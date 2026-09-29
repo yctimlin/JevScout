@@ -265,21 +265,45 @@ export function settingsPath(scope: 'project' | 'user', cwd = process.cwd()): st
   return scope === 'user' ? join(homedir(), '.claude', 'settings.json') : join(cwd, '.claude', 'settings.json');
 }
 
-const isOurs = (cli: string) => (entry: any) => typeof entry?.command === 'string' && entry.command.includes(`${cli} hook `);
+// Words as shellWord() writes them: bare, or single-quoted with '\'' escapes.
+const WORD = String.raw`(?:'(?:[^']|'\\'')*'|[^\s']+)`;
+const HOOK_COMMAND = new RegExp(String.raw`^(?:JEVSCOUT_HOOK_MODE=lexical )?${WORD} (${WORD}) hook (?:post-tool|pre-bash)$`);
+const ALLOW_RULE = new RegExp(String.raw`^Bash\(${WORD} (${WORD}) (?:output|condense):\*\)$`);
+const unquote = (word: string) => word.startsWith("'") ? word.slice(1, -1).replace(/'\\''/g, "'") : word;
 
-// Removes JevScout's hooks and allow rules, leaving everything else untouched.
+// Recognizes JevScout wherever it was installed (a checkout, a global npm package, a project
+// dependency), so reinstalling from another path replaces the old hook instead of adding a second.
+export function isJevScoutCli(path: string, current?: string): boolean {
+  if (path === current) return true;
+  if (!/(?:^|\/)cli\.[jt]s$/.test(path)) return false;
+  try {
+    if (JSON.parse(readFileSync(join(dirname(path), '..', 'package.json'), 'utf8'))?.name === 'jevscout') return true;
+  } catch { /* The old install may have been removed; fall back to its path. */ }
+  return /(?:^|\/)jevscout\/(?:dist\/cli\.js|src\/cli\.ts)$/i.test(path);
+}
+
+const ownsCommand = (command: unknown, cli: string) => {
+  const match = typeof command === 'string' ? HOOK_COMMAND.exec(command) : null;
+  return Boolean(match && isJevScoutCli(unquote(match[1]), cli));
+};
+const ownsRule = (rule: unknown, cli: string) => {
+  const match = typeof rule === 'string' ? ALLOW_RULE.exec(rule) : null;
+  return Boolean(match && isJevScoutCli(unquote(match[1]), cli));
+};
+
+// Removes JevScout's hooks and allow rules from any install path, leaving everything else untouched.
 export function withoutJevScout(settings: any, cli: string): any {
   const next = structuredClone(settings ?? {});
   for (const event of ['PostToolUse', 'PreToolUse']) {
     const groups = next.hooks?.[event];
     if (!Array.isArray(groups)) continue;
-    next.hooks[event] = groups.map((group: any) => ({ ...group, hooks: (group.hooks ?? []).filter((hook: any) => !isOurs(cli)(hook)) }))
+    next.hooks[event] = groups.map((group: any) => ({ ...group, hooks: (group.hooks ?? []).filter((hook: any) => !ownsCommand(hook?.command, cli)) }))
       .filter((group: any) => group.hooks.length);
     if (!next.hooks[event].length) delete next.hooks[event];
   }
   if (next.hooks && !Object.keys(next.hooks).length) delete next.hooks;
   if (Array.isArray(next.permissions?.allow)) {
-    next.permissions.allow = next.permissions.allow.filter((rule: string) => !(rule.includes(`${cli} output`) || rule.includes(`${cli} condense`)));
+    next.permissions.allow = next.permissions.allow.filter((rule: string) => !ownsRule(rule, cli));
     if (!next.permissions.allow.length) delete next.permissions.allow;
     if (!Object.keys(next.permissions).length) delete next.permissions;
   }
