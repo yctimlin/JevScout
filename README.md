@@ -12,6 +12,10 @@ JevScout is an open-source Claude Code `PostToolUse` hook for managing large MCP
 | Codex MCP proxy | **Experimental.** Not validated for this release. |
 | Local `search`, `github`, `check` commands | Experimental; mixed pilot results. |
 
+<p align="center">
+  <img src="assets/jevscout-demo.gif" alt="JevScout demo: a 169 KB MCP result that Claude Code would read in chunks is ranked by Jev, and the agent answers from a 3-segment verbatim packet in 2 turns instead of 5 (−51% time, −42% cost on this task; −38% time, −26% cost across all 7 validation tasks)" width="720">
+</p>
+
 ## At a glance
 
 | Question | Answer |
