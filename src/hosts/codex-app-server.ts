@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chooseOperation, OperationProviderError, operationPayload,
-  type OperationDecision, type OperationDescription, type OperationUsage } from './operation-choice.ts';
+  type OperationDecision, type OperationDescription, type OperationUsage } from '../operations/choice.ts';
 
 export interface ReviewedOperation extends OperationDescription {
   readonly argv: readonly string[];

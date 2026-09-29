@@ -30,7 +30,7 @@ catalog provenance, and consent.
 ## Usage
 
 ```ts
-import { createCodexOperationSession } from 'jevscout/codex-operations';
+import { createCodexOperationSession } from 'jevscout/codex';
 
 const adapter = createCodexOperationSession({
   rpc: existingAppServerClient,

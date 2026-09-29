@@ -1,3 +1,5 @@
+import { readBounded, sendJev, usageOf, type JevUsage } from '../core/jev.ts';
+
 /** A reviewed, fixed operation. Jev never supplies executable arguments. */
 export interface OperationDescription {
   readonly id: string;
@@ -6,7 +8,7 @@ export interface OperationDescription {
   readonly completion: string;
 }
 
-export interface OperationUsage { readonly inputTokens: number; readonly outputTokens: number }
+export type OperationUsage = JevUsage;
 export interface OperationDecision {
   readonly choice: string;
   readonly confidence: number;
@@ -40,39 +42,20 @@ export function operationPayload(request: string, operations: readonly Operation
   return payload;
 }
 
-function usageOf(value: unknown): OperationUsage | null {
-  const u = value as Record<string, unknown> | null;
-  return u && Number.isSafeInteger(u.input_tokens) && Number.isSafeInteger(u.output_tokens) &&
-    (u.input_tokens as number) >= 0 && (u.output_tokens as number) >= 0
-    ? Object.freeze({ inputTokens: u.input_tokens as number, outputTokens: u.output_tokens as number }) : null;
-}
-
 export async function chooseOperation(request: string, operations: readonly OperationDescription[], options: {
   key: string; model?: string; signal?: AbortSignal; fetcher?: typeof fetch;
 }): Promise<OperationDecision> {
   const payload = operationPayload(request, operations, options.model);
   const allowedChoices = Object.keys(payload.questions.action.criteria);
-  const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000);
   let response: Response;
   try {
-    response = await (options.fetcher ?? fetch)('https://api.typesafe.ai/v1/systemone', {
-      method: 'POST', redirect: 'error', signal,
-      headers: { Authorization: `Bearer ${options.key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    });
+    response = await sendJev(JSON.stringify(payload), { key: options.key, fetcher: options.fetcher, signal: options.signal, timeoutMs: 10_000 });
   } catch { throw new OperationProviderError('TypeSafe request failed; usage is unknown'); }
-  const reader = response.body?.getReader();
-  const chunks: Uint8Array[] = []; let size = 0;
-  try {
-    if (!reader) throw new Error('No response body');
-    while (true) {
-      const { done, value } = await reader.read(); if (done) break;
-      size += value.byteLength;
-      if (size > 65_536) { await reader.cancel(); throw new Error('Response too large'); }
-      chunks.push(value);
-    }
-  } catch { throw new OperationProviderError('Invalid TypeSafe response; usage is unknown'); }
+  let raw: string;
+  try { raw = await readBounded(response, 65_536); }
+  catch { throw new OperationProviderError('Invalid TypeSafe response; usage is unknown'); }
   let data: { answers?: { action?: { type?: unknown; choice?: unknown; confidence?: unknown } }; usage?: unknown };
-  try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  try { data = JSON.parse(raw); }
   catch { throw new OperationProviderError('Invalid TypeSafe JSON; usage is unknown'); }
   const usage = usageOf(data?.usage);
   if (!response.ok) throw new OperationProviderError(`TypeSafe HTTP ${response.status}`, usage);

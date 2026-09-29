@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { JevUnavailableError, coarsePool, condense, recordHint, outputDir, projectRecord, pruneOutputs, queryTerms, recoverOutput, segment } from '../src/condense.ts';
+import { JevUnavailableError, coarsePool, condense, jevPreview, recordHint, outputDir, projectRecord, pruneOutputs, queryTerms, recoverOutput, segment } from '../src/condense.ts';
 import { EXTERNAL_COMMAND, hookConfig, hookQuery, hookSettings, installNotice, isLocator, savedOutputPath, updateSettings, withJevScout, withoutJevScout, latestUserPrompt, mcpText, postToolHook, preBashHook, shellQuote } from '../src/hook.ts';
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -354,6 +354,25 @@ test('the coarse stage previews every segment, and large outputs mix lexical lea
   assert.ok(pool.some(item => item.index > 900) && pool.some(item => item.index < 100), 'the sample spans the whole output');
 });
 
+test('head-tail previews keep a late numeric fact without increasing the coarse budget', () => {
+  const preview = "rename('oldFile.txt', 'newFile.txt', (err) => {\n  if (err) throw err;\n  console.log('Rename complete!');\n});\n```\n\nThe snapshot watcher closes its event queue after 31 back-to-back missed refresh cycles.\n";
+  assert.ok(!jevPreview(preview, 160).includes('31 back-to-back'));
+  assert.ok(jevPreview(preview, 160, 'head-tail').includes('31 back-to-back'));
+  assert.ok(jevPreview(preview, 160, 'head-tail').length <= 160);
+});
+
+test('focused Jev packet contains one complete source record and retains exact recovery', async t => {
+  withCache(t);
+  const result = await condense(searchJson, { query: 'which issue reports webhook backoff?', source: 'issues', mode: 'auto',
+    typeSafeKey: 'test', packetStyle: 'focused', budgetBytes: 6000,
+    jevTuning: { skipFineAt: 0.9 }, fetcher: meaningJev(text => text.includes('Webhook retries')) });
+  const chosen = segment(searchJson)[27];
+  assert.ok(result.text.includes(chosen.text));
+  assert.ok(!result.text.includes('Omitted:'));
+  assert.ok(!result.text.includes('segment 0'));
+  assert.ok(recoverOutput(result.id, { segment: 27 }).includes(chosen.text));
+});
+
 test('a failed fine stage keeps the coarse ranking; a missing key is stated in the packet', async t => {
   withCache(t);
   let calls = 0;
@@ -367,6 +386,32 @@ test('a failed fine stage keeps the coarse ranking; a missing key is stated in t
   assert.equal(result.usedMode, 'jev');
   assert.ok(result.text.includes('Webhook retries ignore Retry-After'));
   await assert.rejects(() => condense(searchJson, { query: 'x', source: 'test', budgetBytes: 3000, mode: 'auto' }), JevUnavailableError);
+});
+
+test('a confident coarse match can skip fine ranking', async t => {
+  withCache(t);
+  const calls: Array<{ ids: string[]; texts: string[] }> = [];
+  const result = await condense(searchJson, { query: 'which item is about backoff headers?', source: 'test', budgetBytes: 3000,
+    mode: 'auto', typeSafeKey: 'k', jevTuning: { skipFineAt: 0.9 },
+    fetcher: meaningJev(text => text.includes('Webhook retries'), calls) });
+  assert.ok(result.text.includes('Webhook retries ignore Retry-After'));
+  assert.ok(calls.every(call => call.texts.every(text => text.length <= 400)), 'the fine stage was skipped');
+});
+
+test('a coarse-stage failure retains usage from completed batches', async t => {
+  withCache(t);
+  let calls = 0;
+  const fetcher = (async (url: string, init: RequestInit) => {
+    calls++;
+    if (calls > 1) return new Response('{}', { status: 503 });
+    return meaningJev(() => true)(url, init);
+  }) as unknown as typeof fetch;
+  await assert.rejects(() => condense(searchJson, { query: 'retry', source: 'test', mode: 'auto', typeSafeKey: 'k',
+    jevTuning: { coarseBatch: 1, concurrency: 1 }, fetcher }), (error: unknown) => {
+      assert.ok(error instanceof JevUnavailableError);
+      assert.deepEqual(error.typeSafe, { calls: 1, inputTokens: 10, outputTokens: 2 });
+      return true;
+    });
 });
 
 test('a JSON-like code sample inside a markdown document does not make it JSON', () => {

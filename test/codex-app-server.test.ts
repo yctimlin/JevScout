@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createCodexOperationSession, type ReviewedOperation, type OperationExecution } from '../src/codex-operations.ts';
-import { chooseOperation } from '../src/operation-choice.ts';
+import { createCodexOperationSession, type ReviewedOperation, type OperationExecution } from '../src/hosts/codex-app-server.ts';
+import { chooseOperation } from '../src/operations/choice.ts';
 
 const operation: ReviewedOperation = {
   id: 'format', purpose: 'Check formatting.', writes: 'None.', completion: 'Report actual formatting findings.',

@@ -1,4 +1,4 @@
-const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone';
+import { noulOf as jevNoul, sendJev } from './core/jev.ts';
 const DEFAULT_MODEL = 'jev-latest';
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_BUDGET_BYTES = 8000;
@@ -246,13 +246,9 @@ function statusOf(supporting: CheckQuote[], contradicting: CheckQuote[]): CheckS
 }
 
 function noulOf(answers: Record<string, unknown>, id: string): number {
-  const answer = answers[id];
-  if (typeof answer !== 'object' || answer === null) throw new Error('Invalid Jev probability.');
-  const value = answer as { type?: unknown; noul?: unknown };
-  if (value.type !== 'noul' || typeof value.noul !== 'number' || !Number.isFinite(value.noul) || value.noul < 0 || value.noul > 1) {
-    throw new Error('Invalid Jev probability.');
-  }
-  return value.noul;
+  const value = jevNoul(answers[id]);
+  if (value === null) throw new Error('Invalid Jev probability.');
+  return value;
 }
 
 function formatProbability(value: number): string {
@@ -423,13 +419,7 @@ export async function check(input: CheckInput, options: CheckOptions = {}): Prom
   const judgeStarted = performance.now();
   let response: Response;
   try {
-    response = await (options.fetcher ?? fetch)(TYPESAFE_URL, {
-      method: 'POST',
-      redirect: 'error',
-      signal: AbortSignal.timeout(remaining),
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, state, questions }),
-    });
+    response = await sendJev(JSON.stringify({ model, state, questions }), { key, fetcher: options.fetcher, timeoutMs: remaining });
   } catch (error) {
     providerFailure(error);
   }

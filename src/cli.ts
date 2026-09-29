@@ -20,7 +20,10 @@ jevscout list <pack-id>
 jevscout github search "task or question" --repo owner/name [options]
 jevscout github open owner/name#123 [--budget-bytes N]
 jevscout check [--format json] [--budget-bytes N] [--model NAME] [--timeout-ms N]
-jevscout hook install | uninstall [--scope project|user] [--lexical-only] [--with-shell] [--dry-run]
+jevscout install claude [--scope user|project] [--lexical-only] [--with-shell] [--dry-run]
+jevscout uninstall claude [--scope user|project] [--dry-run]
+jevscout install codex   (print how to add the Codex operation adapter to an app-server host)
+jevscout hook install | uninstall [--scope project|user] ...   (same as install claude; default scope project)
 jevscout hook settings [--with-shell]   (print the configuration instead of writing it)
 jevscout mcp-proxy [--source NAME] -- MCP_SERVER_COMMAND [ARGS...]
 jevscout condense --source NAME --query TEXT < large-output
@@ -53,6 +56,19 @@ Failures retain lexical results. No automatic hooks or background services.
 Requires rg and Node.js 24+. Set TYPESAFE_API_KEY for Jev.
 `;
 
+const codexInstallGuide = `The Codex operation adapter is a library for applications that drive a Codex app-server
+session, so there is nothing to write to Codex settings. In that application's project:
+
+  npm install jevscout
+
+  import { createCodexOperationSession } from 'jevscout/codex';
+
+The host supplies a reviewed catalog of fixed operations, authorize() and verify(). Read the
+host contract before enabling it: node_modules/jevscout/docs/codex-operation-adapter.md
+Set TYPESAFE_API_KEY in the host's environment; without it every request goes to normal Codex handling.
+The Codex MCP proxy (jevscout mcp-proxy) is a separate, experimental integration.
+`;
+
 function integer(value: string | undefined, fallback: number, min: number, max: number): number {
   const number = value === undefined ? fallback : Number(value);
   if (!Number.isSafeInteger(number) || number < min || number > max) throw new Error(`Expected integer between ${min} and ${max}.`);
@@ -76,19 +92,25 @@ async function main() {
     return;
   }
   if (values.help || !positionals.length) { console.log(help); return; }
+  const hookOptions = { shell: values['with-shell'], lexicalOnly: values['lexical-only'] };
+  const claudeSettings = (action: 'install' | 'uninstall', defaultScope: 'project' | 'user') => {
+    const scope = values.scope ?? defaultScope;
+    if (scope !== 'project' && scope !== 'user') throw new Error('Scope must be project or user.');
+    const result = updateSettings(settingsPath(scope), settings => action === 'install'
+      ? withJevScout(settings, CLI_PATH, hookOptions) : withoutJevScout(settings, CLI_PATH), values['dry-run']);
+    if (values['dry-run']) process.stdout.write(JSON.stringify(result.settings, null, 2) + '\n');
+    else process.stdout.write(`${action === 'install' ? 'Installed JevScout hook in' : 'Removed JevScout hook from'} ${result.file}${result.backup ? ` (backup: ${result.backup})` : ''}\n`);
+    if (action === 'install') process.stdout.write('\n' + installNotice(hookOptions));
+  };
+  if ((positionals[0] === 'install' || positionals[0] === 'uninstall') && positionals.length === 2) {
+    if (positionals[1] === 'claude') { claudeSettings(positionals[0], 'user'); return; }
+    if (positionals[1] === 'codex' && positionals[0] === 'install') { process.stdout.write(codexInstallGuide); return; }
+    if (positionals[1] === 'codex') throw new Error('The Codex adapter is a library in your host application; remove it from that project.');
+    throw new Error('Target must be claude or codex.');
+  }
   if (positionals[0] === 'hook' && positionals.length === 2) {
-    const hookOptions = { shell: values['with-shell'], lexicalOnly: values['lexical-only'] };
     if (positionals[1] === 'settings') { process.stdout.write(JSON.stringify(hookSettings(CLI_PATH, hookOptions), null, 2) + '\n'); return; }
-    if (positionals[1] === 'install' || positionals[1] === 'uninstall') {
-      const scope = values.scope ?? 'project';
-      if (scope !== 'project' && scope !== 'user') throw new Error('Scope must be project or user.');
-      const result = updateSettings(settingsPath(scope), settings => positionals[1] === 'install'
-        ? withJevScout(settings, CLI_PATH, hookOptions) : withoutJevScout(settings, CLI_PATH), values['dry-run']);
-      if (values['dry-run']) process.stdout.write(JSON.stringify(result.settings, null, 2) + '\n');
-      else process.stdout.write(`${positionals[1] === 'install' ? 'Installed JevScout hook in' : 'Removed JevScout hook from'} ${result.file}${result.backup ? ` (backup: ${result.backup})` : ''}\n`);
-      if (positionals[1] === 'install') process.stdout.write('\n' + installNotice(hookOptions));
-      return;
-    }
+    if (positionals[1] === 'install' || positionals[1] === 'uninstall') { claudeSettings(positionals[1], 'project'); return; }
     // Hook entry points fail open: any problem yields no output, which leaves the tool call unchanged.
     process.stdout.write(await runHook(positionals[1], readStdin()));
     return;

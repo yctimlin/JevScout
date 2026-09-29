@@ -21,7 +21,7 @@ JevScout is independent open-source software, not an official TypeSafe product.
 TypeSafe usage is billed separately from the agent cost and token figures above. See [Evaluation](#evaluation) and the [Codex results](#codex-operation-adapter) for scope and measurement details.
 
 <p align="center">
-  <img src="assets/jevscout-demo.gif" alt="JevScout demo: a 169 KB MCP result that Claude Code would read in chunks is ranked by Jev, and the agent answers from a 3-segment verbatim packet in 2 turns instead of 5 (−51% time, −42% cost on this task; −38% time, −26% cost across all 7 validation tasks)" width="720">
+  <img src="https://raw.githubusercontent.com/yctimlin/JevScout/main/assets/jevscout-demo.gif" alt="JevScout demo: a 169 KB MCP result that Claude Code would read in chunks is ranked by Jev, and the agent answers from a 3-segment verbatim packet in 2 turns instead of 5 (−51% time, −42% cost on this task; −38% time, −26% cost across all 7 validation tasks)" width="720">
 </p>
 
 ## Quick install
@@ -30,31 +30,28 @@ Paste one of these prompts into your agent. It runs each step, shows you the out
 
 ### For Claude Code
 
-Requires Node.js 24+, git, and a TypeSafe API key. Paste into Claude Code:
+Requires Node.js 24+ and a TypeSafe API key. Paste into Claude Code:
 
 ```text
 Install JevScout, a Claude Code hook that uses TypeSafe's Jev to condense large MCP results.
 Run each step and show me the output.
 
-1. Check prerequisites: `node --version` (must be 24 or newer) and `git --version`.
-   Stop and tell me if either is missing.
-2. Install or update it in a fixed location (the hook records this path):
-   - If ~/.local/share/jevscout does not exist:
-     git clone https://github.com/yctimlin/JevScout.git ~/.local/share/jevscout
-   - Otherwise: git -C ~/.local/share/jevscout pull --ff-only
-   Then run: cd ~/.local/share/jevscout && npm install   (this also builds dist/)
+1. Check that `node --version` is 24 or newer. Stop and tell me if it is not.
+2. Install or update the package globally:
+   npm install -g jevscout@latest
+   Then confirm it runs: jevscout --version
 3. Preview the settings change and show it to me:
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope user --dry-run
+   jevscout install claude --dry-run
    Ask me to confirm before continuing.
 4. After I confirm, install it:
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope user
+   jevscout install claude
 5. Check whether my TypeSafe key is set, without revealing it:
    test -n "$TYPESAFE_API_KEY" && echo set || echo missing
    Never print the key, ask me to paste it, or write it to any file. If it is missing,
    tell me to get a key at https://typesafe.ai and add `export TYPESAFE_API_KEY=...`
    to my shell profile myself.
 6. Tell me to restart Claude Code. Until the key is set, the hook passes results through unchanged.
-   To uninstall later: node ~/.local/share/jevscout/dist/cli.js hook uninstall --scope user
+   To uninstall later: jevscout uninstall claude
 ```
 
 ### For Codex
@@ -68,8 +65,8 @@ Integrate JevScout's Codex operation adapter into this project. Do not commit.
    `codex app-server` that starts threads and turns). If it does not, stop and explain
    that the adapter needs such a host; do not build one without asking me.
 2. Check `node --version` is 24 or newer, then add the dependency with npm:
-   npm install github:yctimlin/JevScout
-   Confirm node_modules/jevscout/dist/codex-operations.js exists.
+   npm install jevscout
+   Confirm node_modules/jevscout/dist/hosts/codex-app-server.js exists.
 3. Read node_modules/jevscout/docs/codex-operation-adapter.md in full. It is the host
    contract; follow it exactly.
 4. Propose an operation catalog from this repository's own scripts: id, purpose, writes,
@@ -78,7 +75,7 @@ Integrate JevScout's Codex operation adapter into this project. Do not commit.
    network. Show it as a table and wait for my approval.
 5. After I approve, implement the integration:
    - One adapter per thread, created with createCodexOperationSession from
-     'jevscout/codex-operations', using the thread's existing sandbox policy unchanged,
+     'jevscout/codex', using the thread's existing sandbox policy unchanged,
      after the transport is initialized with experimental API support.
    - Call dispatch() with a stable request ID before starting a normal turn, serialized
      with the host's turns. On "deferred", continue the normal Codex turn with the
@@ -96,7 +93,7 @@ Integrate JevScout's Codex operation adapter into this project. Do not commit.
 7. Run the tests and show me the diff.
 ```
 
-Both prompts install from this GitHub repository. Manual steps: [Claude Code hook](#install-the-claude-code-mcp-hook), [Codex adapter](docs/codex-operation-adapter.md).
+Both prompts install the [`jevscout`](https://www.npmjs.com/package/jevscout) package from npm. Manual steps: [Claude Code hook](#install-the-claude-code-mcp-hook), [Codex adapter](docs/codex-operation-adapter.md).
 
 ## At a glance
 
@@ -124,7 +121,7 @@ For Codex app-server hosts, the operation adapter handles explicit requests to r
 
 ## Install the Claude Code MCP hook
 
-Requires Node.js 24+, git, Claude Code (tested with 2.1.281), and a TypeSafe API key.
+Requires Node.js 24+, Claude Code (tested with 2.1.281), and a TypeSafe API key.
 
 To install with a prompt, see [Quick install](#for-claude-code).
 
@@ -133,30 +130,29 @@ To install with a prompt, see [Quick install](#for-claude-code).
    export TYPESAFE_API_KEY=...
    ```
    The key is read from the environment only; JevScout never writes it to any file.
-2. Clone and build JevScout (the package is not published to npm yet):
+2. Install JevScout globally:
    ```sh
-   git clone https://github.com/yctimlin/JevScout.git ~/.local/share/jevscout
-   cd ~/.local/share/jevscout && npm install       # also builds dist/
+   npm install -g jevscout
    ```
 3. Choose one installation scope. Preview the settings change with `--dry-run` before installing.
 
    For all your projects, use user scope (`~/.claude/settings.json`, backed up before changes):
    ```sh
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope user --dry-run
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope user
+   jevscout install claude --dry-run
+   jevscout install claude
    ```
 
    For one project, first change to that project's directory. Project scope writes its `.claude/settings.json`:
    ```sh
    cd /path/to/your-project
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope project --dry-run
-   node ~/.local/share/jevscout/dist/cli.js hook install --scope project
+   jevscout install claude --scope project --dry-run
+   jevscout install claude --scope project
    ```
 4. Restart Claude Code so it picks up the key and the hook.
 
-To uninstall a user-scoped hook, run `node ~/.local/share/jevscout/dist/cli.js hook uninstall --scope user`. For a project-scoped hook, run the same command with `--scope project` from that project's directory. Uninstall removes only JevScout's entries.
+To uninstall a user-scoped hook, run `jevscout uninstall claude`. For a project-scoped hook, run the same command with `--scope project` from that project's directory. Uninstall removes only JevScout's entries.
 
-`install` adds a `PostToolUse` hook for `mcp__.*` and one allow rule for the read-only recovery command, and prints what will be sent to TypeSafe. It records the absolute path of this checkout, so keep the checkout where it is. To update, run `git pull --ff-only && npm install` in the checkout. Without `TYPESAFE_API_KEY` the hook does nothing: results pass through unchanged.
+`install` adds a `PostToolUse` hook for `mcp__.*` and one allow rule for the read-only recovery command, and prints what will be sent to TypeSafe. It records the absolute path of the installed package. To update, run `npm install -g jevscout@latest`. If you switch Node.js versions with a version manager such as nvm, install the package for the new version and run `jevscout install claude` again. Without `TYPESAFE_API_KEY` the hook does nothing: results pass through unchanged.
 
 ## What the hook does
 
@@ -248,7 +244,7 @@ Other settings: `JEVSCOUT_HOOK_SCOPE` (`oversized` by default, or `all`), `JEVSC
 Many Codex requests are really "run this known command": check formatting, apply the formatter, run the unit suite, build the package. Codex normally spends a full agent turn working out and running the command. The operation adapter lets Jev map the request to one of your reviewed, fixed operations instead. If Jev's confidence reaches 0.80 and your host authorizes it, the command runs natively through the Codex app server, your code verifies the evidence, and a host receipt is recorded in the thread so later turns know what happened. Otherwise nothing runs and Codex handles the request normally.
 
 ```ts
-import { createCodexOperationSession } from 'jevscout/codex-operations';
+import { createCodexOperationSession } from 'jevscout/codex';
 ```
 
 The selection payload sent to TypeSafe contains the request text and each operation's ID, purpose, declared writes, and completion description. The adapter does not add execution arguments (`argv`), the working directory (`cwd`), sandbox policy, or API credentials to that payload. Paths or other details included in the request or descriptions are sent as part of that text. Jev selects an operation ID; the host supplies the executable arguments and retains authorization, consent, sandbox policy, and verification.
@@ -365,6 +361,20 @@ Jev calls contain at most 24 candidate excerpts and 48 KB of serialized excerpt 
 - Ranking does not establish truth, completeness, or authority. Required project instructions must be read separately. Always verify a fix with the relevant tests and inspect omitted context when needed.
 - JevScout is an independent open-source prototype, not an official TypeSafe product. API access is separate from this MIT-licensed code.
 
+## Architecture
+
+JevScout is one package with one shared Jev core and separate host adapters. Every decision goes through the same TypeSafe client (request limits, deadlines, retries, usage accounting) and fails open to the host's normal behavior.
+
+| Layer | What it does | Where |
+| --- | --- | --- |
+| Jev core | Sends System One requests and checks answers and usage | `src/core/jev.ts` |
+| Context decision | Ranks segments of a large result and builds a verbatim packet with exact recovery | `src/condense.ts`, exported from `jevscout` |
+| Operation decision | Chooses one reviewed operation, or none, for a request | `src/operations/choice.ts`, exported from `jevscout` |
+| Claude Code host | `PostToolUse` hook for MCP results; `jevscout install claude` | `src/hook.ts` |
+| Codex app-server host | Runs the chosen operation natively and records a receipt; `jevscout/codex` | `src/hosts/codex-app-server.ts` |
+
+Each host can offer only what it allows an add-on to do. Claude Code lets a hook replace an MCP result, so context condensing runs there. Codex hooks cannot replace a result, so on Codex JevScout uses the app-server operation adapter instead. The Codex MCP proxy remains experimental.
+
 ## Development
 
 ```sh
@@ -374,6 +384,8 @@ pnpm build
 ```
 
 TypeScript source uses Node's native type stripping for development; distributed packages contain compiled JavaScript because Node does not strip TypeScript inside `node_modules`. Tests use Node's built-in test runner and need the `rg` binary on `PATH`. No API key is required for unit tests.
+
+`test/jev-golden.test.ts` checks that every TypeSafe request and caller-visible result matches a recorded capture in `test/golden/`. Regenerate that capture only for an intended payload change, and review the diff.
 
 Research informed the scope: [TypeSafe primitives](https://docs.typesafe.ai/primitives), [jev-reranker](https://github.com/shinpr/jev-reranker), and [RTK](https://github.com/rtk-ai/rtk). JevScout's initial implementation is independent; its intended contribution is the discovery-to-evidence workflow and honest evaluation, rather than another generic API client.
 
