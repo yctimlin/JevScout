@@ -30,12 +30,20 @@
   "bin": {
     "jevscout": "dist/cli.js"
   },
+  "exports": {
+    "./codex-operations": {
+      "types": "./dist/codex-operations.d.ts",
+      "default": "./dist/codex-operations.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "skills",
     "README.md",
     "LICENSE",
-    "docs/evaluation.md"
+    "docs/evaluation.md",
+    "docs/codex-operation-adapter.md"
   ],
   "engines": {
     "node": ">=24.0.0"
@@ -45,7 +53,7 @@
     "test": "env -u TYPESAFE_API_KEY node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "prepack": "pnpm build",
+    "prepare": "tsc -p tsconfig.build.json",
     "check": "pnpm typecheck && pnpm test"
   },
   "devDependencies": {
