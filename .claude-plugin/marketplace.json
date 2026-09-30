@@ -1,0 +1,16 @@
+{
+  "name": "jevscout",
+  "description": "JevScout for Claude Code: Jev-ranked, verbatim packets for large MCP results.",
+  "owner": { "name": "yctimlin", "url": "https://github.com/yctimlin" },
+  "plugins": [
+    {
+      "name": "jevscout",
+      "displayName": "JevScout",
+      "description": "Condenses large MCP results with Jev before they fill Claude Code's context. Relevant parts stay verbatim, and the full result stays recoverable.",
+      "source": { "source": "github", "repo": "yctimlin/JevScout", "ref": "v0.5.1" },
+      "homepage": "https://github.com/yctimlin/JevScout",
+      "license": "MIT",
+      "tags": ["mcp", "context", "jev", "typesafe"]
+    }
+  ]
+}

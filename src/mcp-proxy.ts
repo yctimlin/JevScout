@@ -3,6 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { condense, JevUnavailableError, recoverOutput, saveOutput, segment } from './condense.ts';
 import { hookConfig, isLocator, withoutUrls, type HookConfig } from './hook.ts';
+import { recordActivity } from './activity.ts';
 
 // A stdio MCP proxy for hosts whose hooks cannot replace MCP results (Codex). Every message is
 // forwarded unchanged, except that large text results of tools/call come back as condensed packets,
@@ -120,10 +121,18 @@ export async function transformResult(message: any, call: { name: string; argume
   const content = message?.result?.content;
   if (!Array.isArray(content) || !content.length || !content.every((block: any) => block?.type === 'text' && typeof block.text === 'string')) return message;
   const text = content.map((block: any) => block.text).join('\n');
-  if (Buffer.byteLength(text) <= config.minBytes) return message;
+  const bytes = Buffer.byteLength(text);
+  const tool = `${source}/${call.name}`;
+  const started = performance.now();
+  const ms = () => Math.round(performance.now() - started);
+  const passed = (reason: string, typeSafe?: JevUnavailableError['typeSafe'] | null) => {
+    recordActivity({ host: 'codex-proxy', tool, action: 'passed', reason, inputBytes: bytes, ms: ms(), typeSafe: typeSafe ?? null });
+    return message;
+  };
+  if (bytes <= config.minBytes) return passed('small');
   const args = call.arguments && typeof call.arguments === 'object' ? call.arguments as Record<string, unknown> : {};
   const hasTaskQuery = Boolean(call.intent?.trim()) || ['query', 'search', 'question'].some(key => typeof args[key] === 'string' && String(args[key]).trim());
-  if (config.mode === 'auto' && !hasTaskQuery) return message;
+  if (config.mode === 'auto' && !hasTaskQuery) return passed('no-query');
   const query = `${call.intent ?? ''}\n${toolQuery(call.name, call.arguments)}`.trim();
   const skipFineAt = Number(process.env.JEVSCOUT_CODEX_SKIP_FINE_AT);
   const previewStyle = process.env.JEVSCOUT_CODEX_PREVIEW_STYLE;
@@ -134,12 +143,13 @@ export async function transformResult(message: any, call: { name: string; argume
       if (exact && matchesRegistryPackage(args.url, exact.packageName)) {
         const id = saveOutput(text, { source: `${source}/${call.name}`, query, inputBytes: Buffer.byteLength(text), usedMode: 'exact-json', typeSafe: null });
         const packet = `[JevScout exact JSON field from ${source}/${call.name}; source text is verbatim.]\n${exact.packageName ? `Package: ${JSON.stringify(exact.packageName)}\n` : ''}Path: time[${JSON.stringify(exact.version)}], chars ${exact.start}-${exact.end}, segment ${exact.index}\n${exact.raw}\nRecover: the ${RECOVER_TOOL} tool with id ${id} [--segment N | --grep TEXT | --all]\n`;
+        recordActivity({ host: 'codex-proxy', tool, action: 'condensed', inputBytes: bytes, outputBytes: Buffer.byteLength(packet), shown: 1, ms: ms(), typeSafe: null, id });
         const { structuredContent: _dropped, ...rest } = message.result;
         return { ...message, result: { ...rest, content: [{ type: 'text', text: packet }] } };
       }
     }
     const result = await condense(text, {
-      query, source: `${source}/${call.name}`, budgetBytes: config.budgetBytes,
+      query, source: tool, budgetBytes: config.budgetBytes,
       mode: config.mode, typeSafeKey: config.typeSafeKey, model: config.model, timeoutMs: config.timeoutMs,
       jevTuning: {
         ...(Number.isFinite(skipFineAt) && skipFineAt >= 0 && skipFineAt <= 1 ? { skipFineAt } : {}),
@@ -148,7 +158,9 @@ export async function transformResult(message: any, call: { name: string; argume
       packetStyle: focused ? 'focused' : undefined,
       recoverCommand: `the ${RECOVER_TOOL} tool with id`,
     });
-    if (result.outputBytes >= Buffer.byteLength(text)) return message;
+    if (result.outputBytes >= bytes) return passed('not-smaller', result.typeSafe);
+    recordActivity({ host: 'codex-proxy', tool, action: 'condensed', inputBytes: bytes, outputBytes: result.outputBytes,
+      segments: result.segments, shown: result.shown, ms: ms(), typeSafe: result.typeSafe, id: result.id });
     // structuredContent would carry the full payload past the packet, so it is dropped with the text.
     const { structuredContent: _dropped, ...rest } = message.result;
     return { ...message, result: { ...rest, content: [{ type: 'text', text: result.text }] } };
@@ -158,7 +170,7 @@ export async function transformResult(message: any, call: { name: string; argume
         typeSafe: error instanceof JevUnavailableError ? error.typeSafe ?? null : null };
       try { appendFileSync(process.env.JEVSCOUT_CODEX_DIAGNOSTICS, JSON.stringify(diagnostic) + '\n'); } catch { /* diagnostics never affect tool results */ }
     }
-    return message;
+    return passed(error instanceof JevUnavailableError ? error.code : 'error', error instanceof JevUnavailableError ? error.typeSafe : null);
   }
 }
 

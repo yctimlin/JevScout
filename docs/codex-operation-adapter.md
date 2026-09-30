@@ -50,8 +50,8 @@ const adapter = createCodexOperationSession({
     // These checks belong to the embedding application, not to Jev.
     return host.canRunReviewedOperation(operation, request, signal);
   },
-  verify: async (operation, execution) => {
-    return host.verifyOperationEvidence(operation, execution); // 'passed' | 'findings' | 'failed'
+  verify: async (operation, execution, signal) => {
+    return host.verifyOperationEvidence(operation, execution, signal); // 'passed' | 'findings' | 'failed'
   },
 });
 
@@ -87,16 +87,24 @@ compatible policy up front; do not weaken it after a model decision.
 check the declared output files. A zero exit code alone does not prove the task is complete.
 `passed` with a nonzero exit is downgraded to `failed`.
 
+**Callback deadlines.** `authorize` and `verify` each receive an `AbortSignal`. It aborts when the
+request is cancelled or when the callback deadline (`rpcGraceMs`, default 10 seconds) runs out. The
+adapter stops waiting at that point, so stop any work tied to the signal. A late `true` from
+`authorize` never starts a command.
+
 **Output cap.** Captured output is capped (default 65,536 bytes; the evaluation used 1,000,000) and
 flagged as possibly truncated. `verify` sees the capped text and must treat a missing summary line
-conservatively. The byte cut can split a multi-byte UTF-8 character. Configure and validate the cap
-for your operations before relying on the evaluation's performance.
+conservatively. The cut never splits a UTF-8 character, so capped text can end a few bytes short of
+the cap. Configure and validate the cap for your operations before relying on the evaluation's
+performance.
 
 ## Result states
 
 - `deferred`: no command ran, because the key is missing, the provider failed, Jev was not
   confident, the policy is read-only, or the host did not authorize. Normal Codex handling may
-  proceed under the host's existing permissions.
+  proceed under the host's existing permissions. When TypeSafe answered with an HTTP error,
+  `providerStatus` holds the status. 401 or 403 means TypeSafe rejected the key, so every later
+  request will also defer; tell the user instead of deferring silently.
 - `cancelled`: cancelled before execution. Do not start a fallback turn.
 - `completed`: a host-verified `passed` or `findings` result was acknowledged in thread history.
   The receipt describes host execution, not model-generated work.
@@ -118,7 +126,8 @@ across application or adapter restarts; the native process ID is derived from th
 request IDs, and re-dispatch after a restart is untested.
 
 Cancellation after submission asks the app server to terminate that process; it does not undo
-writes. Transport failures keep execution `unknown`. History injection is not retried, because the
+writes. Cancellation during verification stops waiting for `verify` and records the outcome as
+`unknown`. Transport failures keep execution `unknown`. History injection is not retried, because the
 server may have recorded the first request even if its acknowledgement was lost.
 
 ## Known limits
@@ -128,8 +137,6 @@ server may have recorded the first request even if its acknowledgement was lost.
 - The receipt, including up to two capped output streams, is injected into the thread as an
   assistant message labelled as data. That adds follow-up cost and is a prompt-injection surface
   that has not been tested adversarially.
-- `verify` receives no abort signal and may keep running after its callback timeout.
-- A non-OK TypeSafe response with a non-JSON body is reported without its HTTP status.
 
 ## Data sent to TypeSafe
 

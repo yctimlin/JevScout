@@ -48,7 +48,7 @@
     "dist",
     "!dist/codex-decision*",
     "!dist/codex-verification*",
-    "skills",
+    "experimental",
     "README.md",
     "LICENSE",
     "docs/evaluation.md",
@@ -59,7 +59,7 @@
   },
   "scripts": {
     "start": "node src/cli.ts",
-    "test": "env -u TYPESAFE_API_KEY node --test test/*.test.ts",
+    "test": "env -u TYPESAFE_API_KEY JEVSCOUT_CACHE_DIR=\"$(mktemp -d)\" node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "prepare": "tsc -p tsconfig.build.json",

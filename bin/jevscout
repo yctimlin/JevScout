@@ -1,0 +1,4 @@
+#!/bin/sh
+# While the Claude Code plugin is enabled, this directory is on the Bash tool's PATH, so condensed
+# results can name a stable recovery command (`jevscout output <id>`) that survives plugin updates.
+exec node "$(dirname "$0")/../src/cli.ts" "$@"

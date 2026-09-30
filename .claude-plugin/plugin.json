@@ -1,0 +1,19 @@
+{
+  "name": "jevscout",
+  "displayName": "JevScout",
+  "version": "0.5.1",
+  "description": "Condenses large MCP results with Jev before they fill Claude Code's context. Relevant parts stay verbatim, and the full result stays recoverable.",
+  "author": { "name": "yctimlin", "url": "https://github.com/yctimlin" },
+  "homepage": "https://github.com/yctimlin/JevScout",
+  "repository": "https://github.com/yctimlin/JevScout",
+  "license": "MIT",
+  "keywords": ["mcp", "context", "jev", "typesafe", "hooks"],
+  "userConfig": {
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Lets Jev rank large MCP results. Stored in your system's credential store, not in settings files. Leave it empty to use TYPESAFE_API_KEY from the environment Claude Code starts in.",
+      "sensitive": true
+    }
+  }
+}

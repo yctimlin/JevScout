@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NODE_COMPILE_CACHE=\"${CLAUDE_PLUGIN_DATA}/compile-cache\" node \"${CLAUDE_PLUGIN_ROOT}/src/cli.ts\" hook post-tool",
+            "timeout": 30,
+            "statusMessage": "JevScout is checking this result"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -10,6 +10,8 @@ import { check, parseCheckInput, readBoundedInput } from './check.ts';
 import { recoverOutput } from './condense.ts';
 import { CLI_PATH, condenseStdin, execCondensed, hookSettings, installNotice, readStdin, runHook, settingsPath, updateSettings, withJevScout, withoutJevScout } from './hook.ts';
 import { runProxy } from './mcp-proxy.ts';
+import { formatActivity, readActivity, summarizeActivity } from './activity.ts';
+import { doctor, formatDoctor } from './doctor.ts';
 
 const help = `JevScout — source evidence before it fills your context
 
@@ -23,6 +25,8 @@ jevscout check [--format json] [--budget-bytes N] [--model NAME] [--timeout-ms N
 jevscout install claude [--scope user|project] [--lexical-only] [--with-shell] [--dry-run]
 jevscout uninstall claude [--scope user|project] [--dry-run]
 jevscout install codex   (print how to add the Codex operation adapter to an app-server host)
+jevscout doctor [--live] [--format json]   (check the install; --live sends one tiny request to TypeSafe)
+jevscout stats [--days N] [--format json]   (what JevScout condensed or passed through, from a local log)
 jevscout hook install | uninstall [--scope project|user] ...   (same as install claude; default scope project)
 jevscout hook settings [--with-shell]   (print the configuration instead of writing it)
 jevscout mcp-proxy [--source NAME] -- MCP_SERVER_COMMAND [ARGS...]
@@ -84,7 +88,7 @@ async function main() {
     repo: { type: 'string' }, limit: { type: 'string' }, 'follow-links': { type: 'boolean' },
     'evidence-sections': { type: 'boolean' },
     source: { type: 'string' }, query: { type: 'string' }, segment: { type: 'string' }, grep: { type: 'string' },
-    all: { type: 'boolean' }, context: { type: 'string' }, scope: { type: 'string' }, 'with-shell': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'lexical-only': { type: 'boolean' },
+    all: { type: 'boolean' }, context: { type: 'string' }, days: { type: 'string' }, live: { type: 'boolean' }, scope: { type: 'string' }, 'with-shell': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'lexical-only': { type: 'boolean' },
   } });
   if (values.version) {
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -113,6 +117,18 @@ async function main() {
     if (positionals[1] === 'install' || positionals[1] === 'uninstall') { claudeSettings(positionals[1], 'project'); return; }
     // Hook entry points fail open: any problem yields no output, which leaves the tool call unchanged.
     process.stdout.write(await runHook(positionals[1], readStdin()));
+    return;
+  }
+  if (positionals[0] === 'doctor' && positionals.length === 1) {
+    const report = await doctor({ live: values.live });
+    process.stdout.write(values.format === 'json' ? JSON.stringify(report) + '\n' : formatDoctor(report));
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+  if (positionals[0] === 'stats' && positionals.length === 1) {
+    const days = integer(values.days, 7, 1, 3650);
+    const summary = summarizeActivity(readActivity(Date.now() - days * 86_400_000));
+    process.stdout.write(values.format === 'json' ? JSON.stringify({ days, ...summary }) + '\n' : formatActivity(summary, days));
     return;
   }
   if (positionals[0] === 'exec' && positionals.length > 1) {

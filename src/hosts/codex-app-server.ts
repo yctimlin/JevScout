@@ -25,7 +25,9 @@ export interface OperationReceipt {
   readonly cancellationRequested: boolean;
 }
 export type DispatchResult =
-  | { readonly kind: 'deferred'; readonly reason: string; readonly usage: OperationUsage | null; readonly decision?: OperationDecision }
+  | { readonly kind: 'deferred'; readonly reason: string; readonly usage: OperationUsage | null; readonly decision?: OperationDecision;
+      /** TypeSafe's HTTP status for provider_unavailable_or_invalid, when it answered: 401 or 403 means the key was rejected. */
+      readonly providerStatus?: number }
   | { readonly kind: 'cancelled'; readonly execution: 'not_started'; readonly usage: OperationUsage | null }
   | { readonly kind: 'completed'; readonly receipt: OperationReceipt; readonly decision: OperationDecision; readonly history: 'recorded' }
   | { readonly kind: 'attention'; readonly receipt: OperationReceipt; readonly decision: OperationDecision;
@@ -43,6 +45,15 @@ function frozenJson(value: unknown, ancestors = new Set<object>()): unknown {
   ancestors.delete(value); return Object.freeze(copy);
 }
 
+/** The longest prefix of text that fits in maxBytes of UTF-8 without splitting a character. */
+function utf8Prefix(text: string, maxBytes: number): string {
+  const bytes = Buffer.from(text);
+  if (bytes.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
 async function bounded<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => finish(new Error('Operation callback timed out')), timeoutMs);
@@ -57,6 +68,16 @@ async function bounded<T>(promise: Promise<T>, timeoutMs: number, signal?: Abort
   });
 }
 
+// Runs a host callback with a signal that aborts on cancellation or as soon as the adapter stops waiting.
+async function hostCallback<T>(start: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  try { return await bounded(start(controller.signal), timeoutMs, signal); }
+  catch (error) { controller.abort(); throw error; }
+  finally { signal?.removeEventListener('abort', stop); }
+}
+
 export function createCodexOperationSession(options: {
   rpc: CodexOperationRpc;
   threadId: string;
@@ -67,10 +88,12 @@ export function createCodexOperationSession(options: {
   key?: string;
   model?: string;
   fetcher?: typeof fetch;
-  /** Recheck current permissions, catalog freshness, workspace state, and prerequisites. */
+  /** Recheck current permissions, catalog freshness, workspace state, and prerequisites. The signal aborts
+   * when the request is cancelled or rpcGraceMs runs out; the adapter stops waiting either way. */
   authorize(operation: ReviewedOperation, request: OperationRequest, signal?: AbortSignal): Promise<boolean>;
-  /** Check actual command evidence. A zero exit code alone need not prove task completion. */
-  verify(operation: ReviewedOperation, result: OperationExecution): Promise<'passed' | 'findings' | 'failed'>;
+  /** Check actual command evidence. A zero exit code alone need not prove task completion. The signal
+   * aborts when the request is cancelled or rpcGraceMs runs out, so checks can stop early. */
+  verify(operation: ReviewedOperation, result: OperationExecution, signal?: AbortSignal): Promise<'passed' | 'findings' | 'failed'>;
   timeoutMs?: number;
   outputBytesCap?: number;
   maxRequests?: number;
@@ -112,8 +135,9 @@ export function createCodexOperationSession(options: {
     try { decision = await chooseOperation(request.text, operations, { key, model, fetcher, signal }); }
     catch (error) {
       const usage = error instanceof OperationProviderError ? error.usage : null;
+      const status = error instanceof OperationProviderError ? error.status : null;
       return signal?.aborted ? Object.freeze({ kind: 'cancelled', execution: 'not_started', usage })
-        : Object.freeze({ kind: 'deferred', reason: 'provider_unavailable_or_invalid', usage });
+        : Object.freeze({ kind: 'deferred', reason: 'provider_unavailable_or_invalid', usage, ...(status === null ? {} : { providerStatus: status }) });
     }
     if (signal?.aborted) return Object.freeze({ kind: 'cancelled', execution: 'not_started', usage: decision.usage });
     const operation = operations.find(op => op.id === decision.selected);
@@ -122,7 +146,7 @@ export function createCodexOperationSession(options: {
       return Object.freeze({ kind: 'deferred', reason: 'read_only_policy', decision, usage: decision.usage });
     }
     let permitted = false;
-    try { permitted = await bounded(authorize(operation, request, signal), rpcGraceMs, signal) === true; } catch { /* No execution on a failed permission check. */ }
+    try { permitted = await hostCallback(s => authorize(operation, request, s), rpcGraceMs, signal) === true; } catch { /* No execution on a failed permission check. */ }
     if (signal?.aborted) return Object.freeze({ kind: 'cancelled', execution: 'not_started', usage: decision.usage });
     if (!permitted) return Object.freeze({ kind: 'deferred', reason: 'host_did_not_authorize', decision, usage: decision.usage });
     const processId = 'jev-' + createHash('sha256').update(threadId + '\0' + request.id).digest('hex').slice(0, 32);
@@ -141,11 +165,12 @@ export function createCodexOperationSession(options: {
         throw new Error('Unknown command outcome');
       }
       execution = Object.freeze({ exitCode: response.exitCode!,
-        stdout: Buffer.from(response.stdout).subarray(0, outputBytesCap).toString('utf8'),
-        stderr: Buffer.from(response.stderr).subarray(0, outputBytesCap).toString('utf8'),
+        stdout: utf8Prefix(response.stdout, outputBytesCap),
+        stderr: utf8Prefix(response.stderr, outputBytesCap),
         outputMayBeTruncated: Buffer.byteLength(response.stdout) >= outputBytesCap || Buffer.byteLength(response.stderr) >= outputBytesCap });
       phase = 'verification';
-      const verified = await bounded(verify(operation, execution), rpcGraceMs);
+      const finished = execution;
+      const verified = await hostCallback(s => verify(operation, finished, s), rpcGraceMs, signal);
       outcome = ['passed','findings','failed'].includes(verified) ? verified : 'unknown';
       if ((outcome === 'passed' && execution.exitCode !== 0) || execution.exitCode < 0) outcome = 'failed';
     } catch {
@@ -167,9 +192,10 @@ export function createCodexOperationSession(options: {
     } catch {
       return Object.freeze({ kind: 'attention', phase: 'history', history: 'unknown', receipt, decision });
     }
+    // A cancellation can also arrive while the receipt is being recorded.
     return (outcome === 'passed' || outcome === 'findings') && !signal?.aborted
       ? Object.freeze({ kind: 'completed', history: 'recorded', receipt, decision })
-      : Object.freeze({ kind: 'attention', phase, history: 'recorded', receipt, decision });
+      : Object.freeze({ kind: 'attention', phase: signal?.aborted ? 'cancellation' : phase, history: 'recorded', receipt, decision });
   }
 
   return Object.freeze({

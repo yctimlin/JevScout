@@ -34,7 +34,8 @@
     "typeSafe": {
      "calls": 2,
      "inputTokens": 246,
-     "outputTokens": 14
+     "outputTokens": 14,
+     "model": "jev-golden"
     }
    }
   }
@@ -84,7 +85,8 @@
     "typeSafe": {
      "calls": 2,
      "inputTokens": 246,
-     "outputTokens": 14
+     "outputTokens": 14,
+     "model": "jev-golden"
     }
    }
   }
@@ -1063,7 +1065,7 @@
   "outcome": {
    "error": {
     "name": "Error",
-    "message": "Invalid TypeSafe JSON; usage is unknown"
+    "message": "TypeSafe HTTP 502; usage is unknown"
    }
   }
  },

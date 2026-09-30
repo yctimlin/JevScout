@@ -15,9 +15,53 @@ JevScout is independent open-source software, not an official TypeSafe product.
 
 ## Install
 
-Requires Node.js 24+ and a [TypeSafe](https://typesafe.ai) API key. JevScout reads the key from `TYPESAFE_API_KEY` and never writes it to any file. Without a key, results pass through unchanged.
+Requires Node.js 24+ and a [TypeSafe](https://typesafe.ai) API key. Without a key, results pass through unchanged. JevScout never writes the key to a settings file.
 
 ### Claude Code
+
+Install the plugin from your shell:
+
+```sh
+claude plugin marketplace add yctimlin/JevScout
+claude plugin install jevscout@jevscout
+```
+
+Then, in Claude Code, run `/plugin configure jevscout@jevscout` to add your TypeSafe API key, and restart Claude Code. Claude Code keeps the key in your system's credential store. If `TYPESAFE_API_KEY` is already set in the environment Claude Code starts in, you can skip that step. Inside Claude Code, `/plugin install jevscout --marketplace yctimlin/JevScout` adds the marketplace and installs in one step.
+
+- **What it adds:** one `PostToolUse` hook for `mcp__.*` tools, and a `jevscout` command on the agent's `PATH` for recovering exact text from a condensed result. It adds no skills and no always-on context. Plugins can't add permission rules, so Claude Code asks the first time the agent runs `jevscout output …`; choose "don't ask again" to allow it from then on.
+- **How you know it's working:** when an MCP tool returns a result too large for Claude Code, the agent gets a packet starting with `[JevScout condensed …]` instead of a notice to read a saved copy in chunks, and you see a one-line notice such as `JevScout kept 5.9 KB of this 207 KB result`. The notice is shown to you only, not added to the model's context. If a large result passes through because the key is missing or Jev is unavailable, the notice says so. `JEVSCOUT_HOOK_NOTICES=off` hides these notices.
+- **Check the install:** ask Claude to run `jevscout doctor`, or run `npx jevscout@latest doctor` in your shell. It finds the plugin, runs its hook offline on a synthetic oversized result, and warns if JevScout is also installed in your settings. It never prints the key.
+- **See what it did:** ask Claude to run `jevscout stats`, or run `npx jevscout@latest stats`. It summarizes the last 7 days (`--days N`): how many results were condensed or passed through and why, how much output stayed out of context, and TypeSafe usage.
+- **Update:** `claude plugin update jevscout@jevscout`, then restart Claude Code. The plugin changes only when a new JevScout version is released. To update automatically, turn on auto-update for the `jevscout` marketplace in `/plugin` → Marketplaces.
+- **Uninstall:** `claude plugin uninstall jevscout@jevscout`.
+
+<details>
+<summary><b>Or let Claude Code install it for you</b></summary>
+
+Paste this into Claude Code. It runs each step, shows you the output, and asks before changing anything outside the plugin.
+
+```text
+Install JevScout, a Claude Code plugin that uses TypeSafe's Jev to condense large MCP results.
+Run each step and show me the output.
+
+1. Check that `node --version` is 24 or newer. Stop and tell me if it is not.
+2. Add the marketplace and install the plugin:
+   claude plugin marketplace add yctimlin/JevScout
+   claude plugin install jevscout@jevscout
+3. Check the install: npx jevscout@latest doctor
+   Show me the result. If it says JevScout is also installed in my settings,
+   ask me before removing that copy with: npx jevscout@latest uninstall claude
+4. Tell me to add my TypeSafe API key myself by running /plugin configure jevscout@jevscout
+   (keys are at https://typesafe.ai). Never ask me to paste the key, print it, or write it
+   to any file.
+5. Tell me to restart Claude Code. Until a key is set, the hook passes results through unchanged.
+   To uninstall later: claude plugin uninstall jevscout@jevscout
+```
+
+</details>
+
+<details>
+<summary><b>Install with npm instead</b></summary>
 
 ```sh
 npm install -g jevscout
@@ -27,12 +71,14 @@ jevscout install claude
 Then add `export TYPESAFE_API_KEY=...` to your shell profile and restart Claude Code.
 
 - **What it changes:** `~/.claude/settings.json` (backed up first) gets one `PostToolUse` hook for `mcp__.*` tools and one allow rule for the read-only recovery command. Preview it with `jevscout install claude --dry-run`, or add `--scope project` to use the current project's `.claude/settings.json` instead.
-- **How you know it's working:** when an MCP tool returns a result too large for Claude Code, the agent gets a packet starting with `[JevScout condensed …]` instead of a notice to read a saved copy in chunks.
+- **How you know it's working:** when an MCP tool returns a result too large for Claude Code, the agent gets a packet starting with `[JevScout condensed …]` instead of a notice to read a saved copy in chunks, and you see a one-line notice such as `JevScout kept 5.9 KB of this 207 KB result`. The notice is shown to you only, not added to the model's context. If a large result passes through because the key is missing or Jev is unavailable, the notice says so. `JEVSCOUT_HOOK_NOTICES=off` hides these notices.
+- **Check the install:** `jevscout doctor` checks the hook entry and its Node and JevScout paths, whether `TYPESAFE_API_KEY` is set (it never prints the key), and whether your Claude Code version still writes the notice JevScout reads. It also runs the installed hook offline on a synthetic oversized result. `jevscout doctor --live` also sends one tiny ranking request to TypeSafe.
+- **See what it did:** `jevscout stats` summarizes the last 7 days (`--days N`): how many results were condensed or passed through and why, how much output stayed out of context, and TypeSafe usage.
 - **Update:** `npm install -g jevscout@latest`. Running `jevscout install claude` again replaces any earlier JevScout hook, including one installed from a git checkout, instead of adding a second. After switching Node.js versions with nvm or similar, install the package for the new version and rerun `jevscout install claude`.
 - **Uninstall:** `jevscout uninstall claude` (add `--scope project` for a project install) removes only JevScout's entries.
 
 <details>
-<summary><b>Or let Claude Code install it for you</b></summary>
+<summary><b>Or let Claude Code install it with npm</b></summary>
 
 Paste this into Claude Code. It runs each step, shows you the output, and asks before changing your settings.
 
@@ -54,15 +100,19 @@ Run each step and show me the output.
    Never print the key, ask me to paste it, or write it to any file. If it is missing,
    tell me to get a key at https://typesafe.ai and add `export TYPESAFE_API_KEY=...`
    to my shell profile myself.
-6. Tell me to restart Claude Code. Until the key is set, the hook passes results through unchanged.
+6. Check the install: jevscout doctor
+   Show me the result. It never prints the key.
+7. Tell me to restart Claude Code. Until the key is set, the hook passes results through unchanged.
    To uninstall later: jevscout uninstall claude
 ```
 
 </details>
 
+</details>
+
 ### Codex
 
-Codex hooks can't replace tool results, so on Codex, JevScout is a library for applications that drive a Codex app-server session. It lets Jev send routine requests, such as "check formatting" or "run the unit tests", straight to one of your reviewed commands (see [Codex operation adapter](#codex-operation-adapter)). In that application's project:
+Codex hooks can replace a tool result only for models that call tools directly (gpt-5.5), not for code-mode models such as gpt-6-sol. So on Codex, JevScout is a library for applications that drive a Codex app-server session. It lets Jev send routine requests, such as "check formatting" or "run the unit tests", straight to one of your reviewed commands (see [Codex operation adapter](#codex-operation-adapter)). In that application's project:
 
 ```sh
 npm install jevscout
@@ -147,7 +197,7 @@ TypeSafe usage is billed separately from the agent cost and token figures above.
 | How does it help Claude Code? | Jev selects relevant segments from large MCP responses, including paraphrased facts. Selected text stays verbatim, with omission markers, source positions, and exact recovery. |
 | How does it help Codex? | Jev selects a reviewed repository operation so host code can execute and verify it without a full Codex decision turn. The result is recorded for later conversation turns. |
 | What happens when Jev is unavailable? | The Claude hook leaves the original tool result unchanged. The Codex adapter defers the request to normal Codex handling. |
-| What do I need? | The Claude integration uses MCP hooks. The Codex library requires an application that already drives Codex app-server sessions and supplies authorization and verification callbacks. |
+| What do I need? | For Claude Code, the JevScout plugin (or the same hook installed with npm) and a TypeSafe API key. The Codex library requires an application that already drives Codex app-server sessions and supplies authorization and verification callbacks. |
 | Which connectors can the Claude hook handle? | MCP servers for GitHub, Notion, Linear, Slack, fetch services, issue search, and similar text sources. |
 
 ## Use cases
@@ -168,7 +218,7 @@ For Codex app-server hosts, the operation adapter handles explicit requests to r
 - **Only large, oversized results.** By default the hook acts only when a result exceeds Claude Code's own limit (Claude Code would otherwise replace it with a notice asking the agent to read a saved copy completely, in chunks) **and** is at least 100 KB. Smaller results pass through unchanged: inline results are cheap, and just over the limit Claude Code's own saved-copy flow is cheap too. `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` changes the floor; `JEVSCOUT_HOOK_SCOPE=all` also condenses inline results over 8,000 bytes.
 - **Jev judges response segments.** Results are split by shape: JSON records (including JSON after a text preamble, truncated arrays, and large nested maps), markdown or reStructuredText sections with their heading path, or line windows. Jev scores short segment previews across the response, then scores the most promising segments in full. Keyword matches only break ties. The packet (at most 6,000 bytes) keeps the chosen parts verbatim.
 - **Saved copies:** the hook condenses Claude Code's saved copy of an oversized result, reading it only from the current session's `tool-results` directory.
-- **Your request** is the tool's arguments plus your latest prompt, without URLs or the tool's own name.
+- **Your request** is the tool's arguments, the agent's words just before the call, and your latest prompt, without URLs or the tool's own name. Messages Claude Code adds itself (task notifications, session summaries) are skipped. If your latest prompt is just "continue" or a short answer such as "current version", your earlier request is included, and Jev decides whether a short prompt continues it or starts something new.
 - **When Jev finds nothing likely relevant** (best estimate below 0.5), the original result passes through unchanged, so Claude Code's normal flow applies.
 - **Recovery:** `jevscout output <id> --segment N | --grep TEXT | --all` returns exact original text. `--grep` accepts literal text or, if that finds nothing, a regular expression.
 - **Fails open:** with no key, a TypeSafe error or timeout (one retry for server errors), or any other problem, the original result is left unchanged. Images and other non-text results are never touched.
@@ -178,7 +228,7 @@ For Codex app-server hosts, the operation adapter handles explicit requests to r
 
 1. Claude Code receives a text response from an MCP server.
 2. The hook checks whether the response is an oversized saved result and meets the configured size floor.
-3. Jev scores previews of the response segments against the tool request and latest user prompt.
+3. Jev scores previews of the response segments against the tool request and what you asked for in the conversation.
 4. JevScout sends a compact, source-faithful packet to Claude Code and keeps the full response locally for recovery.
 
 The default path is reversible: small responses, low-confidence results, missing credentials, provider failures, and timeouts continue through Claude Code's normal handling.
@@ -242,9 +292,11 @@ Yes, as a library rather than an installable hook. For Codex, the [operation ada
 
 ## Privacy and data
 
-The hook sees every MCP text result, including private connector content. When a large result is condensed, JevScout sends its segment text and your request (tool arguments and latest prompt, without URLs) to `api.typesafe.ai`, using `TYPESAFE_API_KEY`. Originals are stored locally under `~/.cache/jevscout/outputs` (or `JEVSCOUT_CACHE_DIR`) with owner-only permissions and are deleted after 7 days (`JEVSCOUT_OUTPUT_TTL_DAYS`, `0` keeps them). To keep everything local, do not set the key (results then pass through unchanged) or use `JEVSCOUT_HOOK_MODE=lexical`, which is not recommended (see above).
+The hook sees every MCP text result, including private connector content. When a large result is condensed, JevScout sends its segment text and your request (tool arguments, the agent's words before the call, and your latest prompt or the earlier request it continues, without URLs) to `api.typesafe.ai`, using the key from the plugin's settings or `TYPESAFE_API_KEY`. Originals are stored locally under `~/.cache/jevscout/outputs` (or `JEVSCOUT_CACHE_DIR`) with owner-only permissions and are deleted after 7 days (`JEVSCOUT_OUTPUT_TTL_DAYS`, `0` keeps them). To keep everything local, do not set the key (results then pass through unchanged) or use `JEVSCOUT_HOOK_MODE=lexical`, which is not recommended (see above).
 
-Other settings: `JEVSCOUT_HOOK_SCOPE` (`oversized` by default, or `all`), `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` (default 100000), `JEVSCOUT_HOOK_MIN_BYTES` (default 8000, used with `all`), `JEVSCOUT_HOOK_BUDGET_BYTES` (6000), `JEVSCOUT_HOOK_TIMEOUT_MS` (8000), `JEVSCOUT_HOOK_MODEL` (TypeSafe model). The hook reads Claude Code's oversize notice by its current wording; if a Claude Code update changes it, large results pass through unchanged.
+For `jevscout stats`, JevScout keeps a local activity log at `~/.cache/jevscout/activity.jsonl` with owner-only permissions. It holds sizes, decisions, timings and TypeSafe token counts only: never tool output, queries, prompts or keys. `JEVSCOUT_ACTIVITY=off` turns it off.
+
+Other settings: `JEVSCOUT_HOOK_SCOPE` (`oversized` by default, or `all`), `JEVSCOUT_HOOK_MIN_OVERSIZED_BYTES` (default 100000), `JEVSCOUT_HOOK_MIN_BYTES` (default 8000, used with `all`), `JEVSCOUT_HOOK_BUDGET_BYTES` (6000), `JEVSCOUT_HOOK_TIMEOUT_MS` (8000), `JEVSCOUT_HOOK_MODEL` (TypeSafe model), `JEVSCOUT_HOOK_NOTICES` (`off` hides the notices), `JEVSCOUT_ACTIVITY` (`off` stops the activity log). The hook reads Claude Code's oversize notice by its current wording; if a Claude Code update changes it, large results pass through unchanged, and `jevscout doctor` reports it.
 
 ## Codex operation adapter
 
@@ -266,7 +318,7 @@ To install it, see [Install → Codex](#codex).
 
 > **Status:** the Codex MCP proxy is experimental and has not been validated for this release.
 
-In the tested Codex CLI version, `PostToolUse` does not transparently replace a successful MCP result. The experimental MCP proxy wraps one stdio server: `jevscout mcp-proxy -- <server command>`. It adds an optional `jevscout_intent` argument to compatible tool schemas, removes it before forwarding the call, and adds `jevscout_recover` for exact local recovery.
+In Codex CLI 0.159.2, a `PostToolUse` hook can replace a tool result only for models that call tools directly (gpt-5.5). Models that run tools inside code-mode scripts, such as gpt-6-sol, still see the original result, and a blocking hook makes the script fail at that call. The experimental MCP proxy doesn't depend on hooks: it sits between Codex and one stdio MCP server: `jevscout mcp-proxy -- <server command>`. It adds an optional `jevscout_intent` argument to compatible tool schemas, removes it before forwarding the call, and adds `jevscout_recover` for exact local recovery.
 
 The proxy uses the tool name, usable text from its arguments, and any supplied `jevscout_intent` to rank large text responses with Jev. It passes the original through when Jev is unavailable or uncertain. It cannot see the user's broader request unless Codex includes it in the tool arguments. This path has separate performance characteristics and remains experimental.
 
@@ -379,10 +431,10 @@ JevScout is one package with one shared Jev core and separate host adapters. Eve
 | Jev core | Sends System One requests and checks answers and usage | `src/core/jev.ts` |
 | Context decision | Ranks segments of a large result and builds a verbatim packet with exact recovery | `src/condense.ts`, exported from `jevscout` |
 | Operation decision | Chooses one reviewed operation, or none, for a request | `src/operations/choice.ts`, exported from `jevscout` |
-| Claude Code host | `PostToolUse` hook for MCP results; `jevscout install claude` | `src/hook.ts` |
+| Claude Code host | `PostToolUse` hook for MCP results; the Claude Code plugin or `jevscout install claude` | `src/hook.ts`, `.claude-plugin/`, `hooks/` |
 | Codex app-server host | Runs the chosen operation natively and records a receipt; `jevscout/codex` | `src/hosts/codex-app-server.ts` |
 
-Each host can offer only what it allows an add-on to do. Claude Code lets a hook replace an MCP result, so context condensing runs there. Codex hooks cannot replace a result, so on Codex JevScout uses the app-server operation adapter instead. The Codex MCP proxy remains experimental.
+Each host can offer only what it allows an add-on to do. Claude Code lets a hook replace an MCP result, so context condensing runs there. Codex hooks can replace a result only for models that call tools directly, not for code-mode models such as gpt-6-sol, so on Codex JevScout uses the app-server operation adapter instead. The Codex MCP proxy remains experimental.
 
 ## Development
 

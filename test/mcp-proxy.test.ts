@@ -245,3 +245,28 @@ test('the MCP proxy condenses large text results, passes small ones through, and
   const bad = await session([{ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'jevscout_recover', arguments: { id: 'nope' } } }], env, dir);
   assert.equal(bad.find(m => m.id === 10).result.isError, true);
 });
+
+test('the proxy records what it condensed or passed through, without source text', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'jevscout-proxy-activity-'));
+  const previous = process.env.JEVSCOUT_CACHE_DIR;
+  process.env.JEVSCOUT_CACHE_DIR = dir;
+  t.after(() => { process.env.JEVSCOUT_CACHE_DIR = previous; rmSync(dir, { recursive: true, force: true }); });
+  const { readActivity } = await import('../src/activity.ts');
+  const text = Array.from({ length: 60 }, (_, i) => i === 41 ? 'Private detail: retries honor Retry-After on 429.' : `Routine paragraph ${i}. `.repeat(10)).join('\n\n');
+  const message = { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text }] } };
+  const small = { jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'ok' }] } };
+  await transformResult(small, { name: 'fetch_doc', arguments: {} }, hookConfig({}), 'docs');
+  await transformResult(message, { name: 'fetch_doc', arguments: {} }, { ...hookConfig({}), minBytes: 1 }, 'docs');
+  await transformResult(message, { name: 'fetch_doc', arguments: {}, intent: 'Retry-After 429' }, { ...hookConfig({}), minBytes: 1 }, 'docs');
+  const condensed = await transformResult(message, { name: 'fetch_doc', arguments: {}, intent: 'Retry-After 429' }, { ...hookConfig({ JEVSCOUT_HOOK_MODE: 'lexical' }), minBytes: 1 }, 'docs');
+  assert.ok(condensed.result.content[0].text.includes('Retry-After'));
+  const events = readActivity();
+  assert.deepEqual(events.map(event => [event.host, event.tool, event.action, event.reason]), [
+    ['codex-proxy', 'docs/fetch_doc', 'passed', 'small'],
+    ['codex-proxy', 'docs/fetch_doc', 'passed', 'no-query'],
+    ['codex-proxy', 'docs/fetch_doc', 'passed', 'no-key'],
+    ['codex-proxy', 'docs/fetch_doc', 'condensed', undefined],
+  ]);
+  assert.equal(events[3].inputBytes, Buffer.byteLength(text));
+  assert.ok(!JSON.stringify(events).includes('Private detail'));
+});

@@ -18,7 +18,11 @@ export interface OperationDecision {
 
 export class OperationProviderError extends Error {
   readonly usage: OperationUsage | null;
-  constructor(message: string, usage: OperationUsage | null = null) { super(message); this.usage = usage; }
+  /** TypeSafe's HTTP status when it answered with an error, so a host can tell a rejected key from an outage. */
+  readonly status: number | null;
+  constructor(message: string, usage: OperationUsage | null = null, status: number | null = null) {
+    super(message); this.usage = usage; this.status = status;
+  }
 }
 
 // Selection identifies an operation; authorization and verification belong to code.
@@ -51,14 +55,17 @@ export async function chooseOperation(request: string, operations: readonly Oper
   try {
     response = await sendJev(JSON.stringify(payload), { key: options.key, fetcher: options.fetcher, signal: options.signal, timeoutMs: 10_000 });
   } catch { throw new OperationProviderError('TypeSafe request failed; usage is unknown'); }
+  // Error responses often carry no JSON (an empty body, or a proxy's HTML page); the status still counts.
+  const httpError = (usage: OperationUsage | null) =>
+    new OperationProviderError(`TypeSafe HTTP ${response.status}${usage ? '' : '; usage is unknown'}`, usage, response.status);
   let raw: string;
   try { raw = await readBounded(response, 65_536); }
-  catch { throw new OperationProviderError('Invalid TypeSafe response; usage is unknown'); }
+  catch { throw response.ok ? new OperationProviderError('Invalid TypeSafe response; usage is unknown') : httpError(null); }
   let data: { answers?: { action?: { type?: unknown; choice?: unknown; confidence?: unknown } }; usage?: unknown };
   try { data = JSON.parse(raw); }
-  catch { throw new OperationProviderError('Invalid TypeSafe JSON; usage is unknown'); }
+  catch { throw response.ok ? new OperationProviderError('Invalid TypeSafe JSON; usage is unknown') : httpError(null); }
   const usage = usageOf(data?.usage);
-  if (!response.ok) throw new OperationProviderError(`TypeSafe HTTP ${response.status}`, usage);
+  if (!response.ok) throw httpError(usage);
   const answer = data?.answers?.action;
   if (!usage || answer?.type !== 'choice' || typeof answer.choice !== 'string' ||
       !allowedChoices.includes(answer.choice) ||

@@ -36,9 +36,30 @@ The Claude Code MCP hook applies the following scope by default:
   original result unchanged.
 - Exact omitted text remains available through the local recovery command.
 
+- Jev ranks against the request built from the conversation: the tool's arguments, the agent's words
+  before the call, and the latest prompt. Entries Claude Code adds itself are skipped. "continue",
+  and short answers that Jev judges to continue the earlier request, include that earlier request.
+
 Keyword-only selection is an explicit opt-in and is not recommended for paraphrased requests.
 The Codex MCP proxy and shell hook remain experimental integrations with separate behavior. The
 Codex operation adapter is a separate library, ready for opt-in use and described below.
+
+## Request from the conversation (0.6.0)
+
+Earlier versions ranked against the last user entry. In real sessions that entry is often "continue",
+a short answer such as "current version", or a message Claude Code generated itself. Across 995 local
+transcripts it was one of those at 42% of tool calls. Jev then picks sections about the wrong thing:
+with "continue", it chose RFC 9110's "100 Continue".
+
+- **Offline:** five real public documents (RFC 9110, Node.js fs and http, Python argparse, and a
+  572 KB GitHub comment thread), 15 questions, 9 conversation patterns. The answer was in the packet
+  128 times against 58 before, and a packet lacked the answer 3 times against 25. Two simpler rules
+  failed their checks first: one on short topic changes, one on short answers.
+- **Multi-turn Claude Code (68 runs):** the conversation request was never less correct (34/34,
+  against 32/34 before). Total agent time fell by 21%, 40% and 50%, and cost by 17%, 29% and 36%, in
+  three rounds. On two individual cases median wall time rose by more than 10%. On one of them the
+  hook did not act in either arm (document below the size floor). On the other, the hook and model
+  time were no higher, and the extra time came from outside the model and the hook.
 
 ## Codex operation adapter
 

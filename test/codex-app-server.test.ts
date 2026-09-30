@@ -209,3 +209,86 @@ test('provider responses cannot inject a command not present in the frozen quest
     operations[0].id = 'malicious'; return response('malicious');
   }) as typeof fetch }), /Invalid TypeSafe operation decision/);
 });
+
+test('output caps never split a UTF-8 character', async () => {
+  let seen: OperationExecution | undefined;
+  const { session } = setup({ outputBytesCap: 258,
+    verify: async (_op, r) => { seen = r; return 'findings'; },
+    rpc: { async request(method) {
+      return method === 'command/exec' ? { exitCode: 1, stdout: 'x' + 'é'.repeat(200), stderr: '😀'.repeat(100) } : {};
+    } },
+  });
+  await session.dispatch(request);
+  assert.equal(seen?.stdout, 'x' + 'é'.repeat(128), 'a cut inside é steps back to the whole character');
+  assert.equal(seen?.stderr, '😀'.repeat(64), 'a cut inside a 4-byte character steps back too');
+  assert.ok(Buffer.byteLength(seen!.stdout) <= 258 && !seen!.stdout.includes('�'));
+  assert.equal(seen?.outputMayBeTruncated, true);
+});
+
+test("provider errors keep TypeSafe's HTTP status, even without a JSON body", async () => {
+  for (const [status, body] of [[502, '<html>Bad gateway</html>'], [401, ''], [401, null],
+    [403, JSON.stringify({ error: 'key rejected', usage: { input_tokens: 3, output_tokens: 0 } })]] as const) {
+    const { session, calls } = setup({ fetcher: (async () => new Response(body, { status })) as typeof fetch });
+    const result = await session.dispatch(request);
+    assert.equal(result.kind, 'deferred');
+    if (result.kind !== 'deferred') continue;
+    assert.equal(result.reason, 'provider_unavailable_or_invalid');
+    assert.equal(result.providerStatus, status);
+    assert.deepEqual(result.usage, status === 403 ? { inputTokens: 3, outputTokens: 0 } : null);
+    assert.equal(calls.length, 0);
+  }
+  await assert.rejects(chooseOperation(request.text, [operation], { key: 'k',
+    fetcher: (async () => new Response('<html>', { status: 502 })) as typeof fetch }),
+  (error: any) => error.status === 502 && /^TypeSafe HTTP 502; usage is unknown$/.test(error.message));
+  const offline = await setup({ fetcher: (async () => { throw new Error('offline'); }) as typeof fetch }).session.dispatch(request);
+  assert.equal(offline.kind, 'deferred');
+  assert.equal('providerStatus' in offline, false, 'a network failure has no HTTP status');
+});
+
+test('authorize and verify get a signal that aborts when the adapter stops waiting or the request is cancelled', async () => {
+  let authorizeSignal: AbortSignal | undefined;
+  const slowAuthorize = setup({ rpcGraceMs: 20, authorize: (_op, _request, signal) => { authorizeSignal = signal; return new Promise<boolean>(() => {}); } });
+  const denied = await slowAuthorize.session.dispatch(request);
+  assert.equal(denied.kind === 'deferred' ? denied.reason : denied.kind, 'host_did_not_authorize');
+  assert.equal(slowAuthorize.calls.length, 0);
+  assert.equal(authorizeSignal?.aborted, true);
+
+  let verifySignal: AbortSignal | undefined;
+  const slowVerify = setup({ rpcGraceMs: 20, verify: (_op, _r, signal) => { verifySignal = signal; return new Promise<'passed'>(() => {}); } });
+  const unverified = await slowVerify.session.dispatch(request);
+  assert.equal(unverified.kind, 'attention');
+  if (unverified.kind === 'attention') { assert.equal(unverified.phase, 'verification'); assert.equal(unverified.receipt.outcome, 'unknown'); }
+  assert.equal(verifySignal?.aborted, true);
+
+  // Cancelling during verification returns promptly instead of waiting out the grace period.
+  const controller = new AbortController();
+  let cancelledSignal: AbortSignal | undefined;
+  const cancelVerify = setup({ rpcGraceMs: 60_000, verify: (_op, _r, signal) => {
+    cancelledSignal = signal; setTimeout(() => controller.abort(), 5); return new Promise<'passed'>(() => {});
+  } });
+  const started = Date.now();
+  const cancelled = await cancelVerify.session.dispatch(request, controller.signal);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(cancelled.kind, 'attention');
+  if (cancelled.kind === 'attention') {
+    assert.equal(cancelled.phase, 'cancellation');
+    assert.equal(cancelled.receipt.execution, 'finished');
+    assert.equal(cancelled.receipt.cancellationRequested, true);
+  }
+  assert.equal(cancelledSignal?.aborted, true);
+
+  let quietSignal: AbortSignal | undefined;
+  await setup({ verify: async (_op, r, signal) => { quietSignal = signal; return r.exitCode === 1 ? 'findings' : 'failed'; } }).session.dispatch(request);
+  assert.equal(quietSignal?.aborted, false, 'a callback that finished in time is not aborted');
+});
+
+test('a cancellation that arrives while the receipt is recorded is labelled as cancellation', async () => {
+  const controller = new AbortController();
+  const { session } = setup({ rpc: { async request(method) {
+    if (method === 'thread/inject_items') { controller.abort(); return {}; }
+    return method === 'command/exec' ? { exitCode: 1, stdout: 'formatting issues: src/file.ts', stderr: '' } : {};
+  } } });
+  const result = await session.dispatch(request, controller.signal);
+  assert.equal(result.kind, 'attention');
+  if (result.kind === 'attention') { assert.equal(result.phase, 'cancellation'); assert.equal(result.history, 'recorded'); }
+});
