@@ -1,7 +1,7 @@
 {
   "name": "jevscout",
   "displayName": "JevScout",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Condenses large MCP results with Jev before they fill Claude Code's context. Relevant parts stay verbatim, and the full result stays recoverable.",
   "author": { "name": "yctimlin", "url": "https://github.com/yctimlin" },
   "homepage": "https://github.com/yctimlin/JevScout",

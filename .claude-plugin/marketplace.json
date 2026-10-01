@@ -7,7 +7,7 @@
       "name": "jevscout",
       "displayName": "JevScout",
       "description": "Condenses large MCP results with Jev before they fill Claude Code's context. Relevant parts stay verbatim, and the full result stays recoverable.",
-      "source": { "source": "github", "repo": "yctimlin/JevScout", "ref": "v0.5.1" },
+      "source": { "source": "github", "repo": "yctimlin/JevScout", "ref": "v0.6.0" },
       "homepage": "https://github.com/yctimlin/JevScout",
       "license": "MIT",
       "tags": ["mcp", "context", "jev", "typesafe"]
